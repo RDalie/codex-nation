@@ -82,6 +82,62 @@ test("GiteaHttpForge forks as the target user via sudo", async () => {
   assert.equal(fork.cloneUrl, "gitea@git.example.test:agent-42/doom-x9f3.git");
 });
 
+test("GiteaHttpForge creates submission snapshot repos and uploads files", async () => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const forge = createForge(async (url, init) => {
+    const request = normalizeRequest(url, init);
+    calls.push(request);
+
+    if (request.url === "https://gitea.test/api/v1/user/repos") {
+      assert.equal(request.init.method, "POST");
+      assert.equal(readHeader(request.init, "sudo"), "agent-42");
+      assert.equal(JSON.parse(request.init.body as string).name, "doom-x9f3-sub-x9f3");
+      return jsonResponse({ owner: { login: "agent-42" }, name: "doom-x9f3-sub-x9f3" }, 201);
+    }
+
+    if (request.url.endsWith("/contents/primer.md")) {
+      if (request.init.method === "GET") {
+        return jsonResponse({ message: "not found" }, 404);
+      }
+
+      assert.equal(request.init.method, "POST");
+      assert.equal(readHeader(request.init, "sudo"), "agent-42");
+      assert.equal(Buffer.from(JSON.parse(request.init.body as string).content, "base64").toString("utf8"), "# Primer\n");
+      return jsonResponse({ content: { path: "primer.md" } }, 201);
+    }
+
+    if (request.url.endsWith("/contents/src/game.ts")) {
+      if (request.init.method === "GET") {
+        return jsonResponse({ message: "not found" }, 404);
+      }
+
+      assert.equal(request.init.method, "POST");
+      assert.equal(readHeader(request.init, "sudo"), "agent-42");
+      assert.equal(
+        Buffer.from(JSON.parse(request.init.body as string).content, "base64").toString("utf8"),
+        "export const title = 'doom';\n"
+      );
+      return jsonResponse({ content: { path: "src/game.ts" } }, 201);
+    }
+
+    throw new Error(`Unexpected request: ${request.url}`);
+  });
+
+  const snapshot = await forge.createSubmissionSnapshot({
+    sourceRepo: "doom-x9f3",
+    targetOwner: "agent-42",
+    files: [
+      { path: "primer.md", contentBase64: Buffer.from("# Primer\n").toString("base64") },
+      { path: "src/game.ts", contentBase64: Buffer.from("export const title = 'doom';\n").toString("base64") }
+    ]
+  });
+
+  assert.equal(snapshot.owner, "agent-42");
+  assert.equal(snapshot.repo, "doom-x9f3-sub-x9f3");
+  assert.equal(snapshot.cloneUrl, "gitea@git.example.test:agent-42/doom-x9f3-sub-x9f3.git");
+  assert.equal(calls.length, 5);
+});
+
 test("GiteaHttpForge decodes base64 file contents", async () => {
   const forge = createForge(async (url, init) => {
     const request = normalizeRequest(url, init);

@@ -8,6 +8,11 @@ export type GitFile = {
   content: string;
 };
 
+export type GitBundleFile = {
+  path: string;
+  contentBase64: string;
+};
+
 export interface GitForge {
   createAgentUser(input: { username: string }): Promise<{ username: string }>;
   addSshKey(input: { username: string; title: string; key: string }): Promise<void>;
@@ -16,6 +21,11 @@ export interface GitForge {
     sourceOwner: string;
     sourceRepo: string;
     targetOwner: string;
+  }): Promise<GitRepoRef>;
+  createSubmissionSnapshot(input: {
+    sourceRepo: string;
+    targetOwner: string;
+    files: GitBundleFile[];
   }): Promise<GitRepoRef>;
   getFile(input: {
     owner: string;

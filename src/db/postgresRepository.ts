@@ -124,11 +124,23 @@ export class PostgresRepository implements AgentHubRepository {
   async createSubmission(input: SubmissionCreate): Promise<Submission> {
     const result = await this.pool.query(
       `
-        INSERT INTO submissions (id, fork_id, commit_sha, primer_path, status)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO submissions (
+          id, fork_id, commit_sha, primer_path, snapshot_owner,
+          snapshot_repo, snapshot_clone_url, status
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
       `,
-      [input.id, input.forkId, input.commitSha, input.primerPath, input.status]
+      [
+        input.id,
+        input.forkId,
+        input.commitSha,
+        input.primerPath,
+        input.snapshotOwner,
+        input.snapshotRepo,
+        input.snapshotCloneUrl,
+        input.status
+      ]
     );
     return mapSubmission(result.rows[0]);
   }
@@ -224,6 +236,9 @@ function mapSubmission(row: Record<string, any>): Submission {
     forkId: row.fork_id,
     commitSha: row.commit_sha,
     primerPath: row.primer_path,
+    snapshotOwner: row.snapshot_owner,
+    snapshotRepo: row.snapshot_repo,
+    snapshotCloneUrl: row.snapshot_clone_url,
     status: row.status,
     createdAt: row.created_at.toISOString()
   };

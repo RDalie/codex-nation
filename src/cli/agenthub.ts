@@ -3,6 +3,7 @@ import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { AgentHubApiClient } from "./api.ts";
+import { createBundle } from "./bundle.ts";
 import { defaultApiUrl, loadConfig, resolveApiUrl, resolveToken, saveConfig } from "./config.ts";
 import { defaultIo, type CliIo, type OutputMode, writeError, writeHuman, writeJson } from "./output.ts";
 
@@ -169,14 +170,31 @@ export async function runCli(argv = process.argv, io: CliIo = defaultIo): Promis
     .argument("<fork-id>", "fork id")
     .option("--commit <sha>", "commit SHA to submit")
     .option("--primer-path <path>", "primer path", "primer.md")
-    .action(async (forkId: string, options: { commit?: string; primerPath?: string }) => {
+    .option("--bundle <dir>", "upload a local directory as an immutable submission repo")
+    .action(async (forkId: string, options: { commit?: string; primerPath?: string; bundle?: string }) => {
       const context = await createContext(program, { requireToken: true });
-      const input: { forkId: string; commitSha?: string; primerPath?: string } = { forkId };
+      if (options.commit && options.bundle) {
+        throw new Error("Use either --commit or --bundle, not both.");
+      }
+
+      const input: {
+        forkId: string;
+        commitSha?: string;
+        primerPath?: string;
+        bundle?: { files: Awaited<ReturnType<typeof createBundle>>["files"] };
+      } = { forkId };
       if (options.commit) {
         input.commitSha = options.commit;
       }
       if (options.primerPath) {
         input.primerPath = options.primerPath;
+      }
+      if (options.bundle) {
+        const bundle = await createBundle({
+          rootPath: options.bundle,
+          primerPath: options.primerPath ?? "primer.md"
+        });
+        input.bundle = { files: bundle.files };
       }
 
       const result = await new AgentHubApiClient({ apiUrl: context.apiUrl, token: context.token }).submit(input);
@@ -295,15 +313,27 @@ function formatForkCreated(result: unknown): string {
 function formatSubmission(result: unknown): string {
   const data = result as {
     fork?: { owner?: string; repo?: string; status?: string };
-    submission?: { id?: string; primerPath?: string };
+    submission?: {
+      id?: string;
+      primerPath?: string;
+      snapshotOwner?: string | null;
+      snapshotRepo?: string | null;
+      snapshotCloneUrl?: string | null;
+    };
     eval?: { status?: string; previewUrl?: string | null };
   };
+  const snapshot =
+    data.submission?.snapshotOwner && data.submission?.snapshotRepo
+      ? `${data.submission.snapshotOwner}/${data.submission.snapshotRepo}`
+      : "none";
 
   return [
     `Submitted: ${data.fork?.owner}/${data.fork?.repo}`,
     `Fork status: ${data.fork?.status}`,
     `Submission ID: ${data.submission?.id}`,
     `Primer: ${data.submission?.primerPath}`,
+    `Snapshot: ${snapshot}`,
+    `Snapshot clone: ${data.submission?.snapshotCloneUrl ?? "none"}`,
     `Eval: ${data.eval?.status}`,
     `Preview: ${data.eval?.previewUrl ?? "pending"}`
   ].join("\n");

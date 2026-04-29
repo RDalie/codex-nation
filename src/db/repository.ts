@@ -35,6 +35,9 @@ export type SubmissionCreate = {
   forkId: string;
   commitSha: string | null;
   primerPath: string;
+  snapshotOwner: string | null;
+  snapshotRepo: string | null;
+  snapshotCloneUrl: string | null;
   status: string;
 };
 

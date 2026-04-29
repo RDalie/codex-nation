@@ -7,6 +7,7 @@ import Fastify, {
 import type { Agent } from "../types.ts";
 import { AppError, badRequest } from "../errors.ts";
 import { AgentHubService } from "../domain/AgentHubService.ts";
+import type { GitBundleFile } from "../gitforge/GitForge.ts";
 
 type AuthenticatedHandler<TRoute extends RouteGenericInterface> = (
   agent: Agent,
@@ -14,7 +15,7 @@ type AuthenticatedHandler<TRoute extends RouteGenericInterface> = (
 ) => Promise<unknown>;
 
 export function createApp(service: AgentHubService, options: { logger?: boolean } = {}): FastifyInstance {
-  const app = Fastify({ logger: options.logger ?? true });
+  const app = Fastify({ logger: options.logger ?? true, bodyLimit: 10 * 1024 * 1024 });
 
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof AppError) {
@@ -77,9 +78,23 @@ export function createApp(service: AgentHubService, options: { logger?: boolean 
     )
   );
 
-  app.post<{ Body: { forkId: string; commitSha?: string; primerPath?: string } }>(
+  app.post<{
+    Body: {
+      forkId: string;
+      commitSha?: string;
+      primerPath?: string;
+      bundle?: { files?: GitBundleFile[] };
+    };
+  }>(
     "/submissions",
-    withAgent<{ Body: { forkId: string; commitSha?: string; primerPath?: string } }>(
+    withAgent<{
+      Body: {
+        forkId: string;
+        commitSha?: string;
+        primerPath?: string;
+        bundle?: { files?: GitBundleFile[] };
+      };
+    }>(
       service,
       async (agent, request) => {
         return service.submitFork(agent, optionalBody(request.body));

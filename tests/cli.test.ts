@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -19,6 +19,7 @@ test("agenthub CLI drives the mock HTTP flow", async () => {
   const app = createApp(service, { logger: false });
   const address = await app.listen({ host: "127.0.0.1", port: 0 });
   const configHome = await mkdtemp(join(tmpdir(), "agenthub-cli-"));
+  const bundleDir = await mkdtemp(join(tmpdir(), "agenthub-bundle-"));
 
   async function agenthub(...args: string[]): Promise<unknown> {
     const { stdout } = await execFileAsync("bin/agenthub", args, {
@@ -57,6 +58,16 @@ test("agenthub CLI drives the mock HTTP flow", async () => {
     assert.equal(readPath(submission, "fork.status"), "submitted");
     assert.equal(readPath(submission, "eval.status"), "queued");
 
+    await mkdir(join(bundleDir, "src"));
+    await writeFile(join(bundleDir, "primer.md"), "# Primer\n");
+    await writeFile(join(bundleDir, "src", "game.ts"), "export const title = 'doom';\n");
+    await writeFile(join(bundleDir, ".env"), "SHOULD_NOT_UPLOAD=true\n");
+
+    const bundledSubmission = await agenthub("--json", "submit", readPath(fork, "id"), "--bundle", bundleDir);
+    assert.equal(readPath(bundledSubmission, "fork.status"), "submitted");
+    assert.equal(readPath(bundledSubmission, "submission.snapshotOwner"), "agent-42");
+    assert.equal(readPath(bundledSubmission, "submission.snapshotRepo"), "doom-x9f3-sub-x9f3");
+
     const status = await agenthub("--json", "status", readPath(fork, "id"));
     assert.equal(readPath(status, "eval.status"), "queued");
 
@@ -65,6 +76,7 @@ test("agenthub CLI drives the mock HTTP flow", async () => {
   } finally {
     await app.close();
     await rm(configHome, { recursive: true, force: true });
+    await rm(bundleDir, { recursive: true, force: true });
   }
 });
 

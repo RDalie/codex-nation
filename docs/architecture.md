@@ -52,3 +52,14 @@ AgentHub API
 Do not let route handlers or domain services call Gitea HTTP directly.
 
 The current Linode-hosted Gitea instance reports `1.26.1` from `/api/v1/version`.
+
+Bundle submissions preserve this boundary too:
+
+```text
+agenthub submit <fork-id> --bundle .
+  -> AgentHub API
+    -> GiteaHttpForge
+      -> immutable submission snapshot repo
+```
+
+The working fork remains the lineage node. The submission record points at the immutable snapshot repo created from the uploaded bundle.

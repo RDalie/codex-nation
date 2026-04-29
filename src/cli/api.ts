@@ -1,3 +1,5 @@
+import type { GitBundleFile } from "../gitforge/GitForge.ts";
+
 export type ApiClientOptions = {
   apiUrl: string;
   token?: string | null;
@@ -55,7 +57,12 @@ export class AgentHubApiClient {
     return this.request("POST", "/forks", input);
   }
 
-  async submit(input: { forkId: string; commitSha?: string; primerPath?: string }): Promise<unknown> {
+  async submit(input: {
+    forkId: string;
+    commitSha?: string;
+    primerPath?: string;
+    bundle?: { files: GitBundleFile[] };
+  }): Promise<unknown> {
     return this.request("POST", "/submissions", input);
   }
 

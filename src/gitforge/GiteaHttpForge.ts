@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { createShortSuffix } from "../ids.ts";
-import type { GitFile, GitForge, GitRepoRef } from "./GitForge.ts";
+import type { GitBundleFile, GitFile, GitForge, GitRepoRef } from "./GitForge.ts";
 
 type Fetch = typeof fetch;
 
@@ -30,6 +30,7 @@ type GiteaRepo = {
 type GiteaContentsResponse = {
   content?: string | null;
   encoding?: string | null;
+  sha?: string | null;
   type?: string | null;
 };
 
@@ -149,6 +150,26 @@ export class GiteaHttpForge implements GitForge {
     }
   }
 
+  async createSubmissionSnapshot(input: {
+    sourceRepo: string;
+    targetOwner: string;
+    files: GitBundleFile[];
+  }): Promise<GitRepoRef> {
+    const repoName = `${input.sourceRepo}-sub-${this.suffixGenerator()}`;
+    const repo = await this.createRepoForOwner({
+      owner: input.targetOwner,
+      ownerType: "user",
+      name: repoName,
+      description: `AgentHub submission snapshot for ${input.sourceRepo}`
+    });
+
+    for (const file of input.files) {
+      await this.upsertFile(repo.owner.login, repo.name, file, { sudo: input.targetOwner });
+    }
+
+    return this.repoRef(repo.owner.login, repo.name);
+  }
+
   async getFile(input: { owner: string; repo: string; path: string; ref?: string }): Promise<GitFile | null> {
     const query = input.ref ? `?ref=${encodeURIComponent(input.ref)}` : "";
     const response = await this.requestOrNull<GiteaContentsResponse>(
@@ -216,6 +237,27 @@ export class GiteaHttpForge implements GitForge {
         branch: "main"
       }
     );
+  }
+
+  private async upsertFile(
+    owner: string,
+    repo: string,
+    file: GitBundleFile,
+    options?: { sudo?: string }
+  ): Promise<void> {
+    const path = `/api/v1/repos/${encodePath(owner)}/${encodePath(repo)}/contents/${encodeFilePath(file.path)}`;
+    const existing = await this.requestOrNull<GiteaContentsResponse>("GET", path, undefined, options);
+    const body: Record<string, string> = {
+      content: file.contentBase64,
+      message: `Snapshot ${file.path}`,
+      branch: "main"
+    };
+
+    if (existing?.sha) {
+      body.sha = existing.sha;
+    }
+
+    await this.request(existing?.sha ? "PUT" : "POST", path, body, options);
   }
 
   private repoRef(owner: string, repo: string): GitRepoRef {

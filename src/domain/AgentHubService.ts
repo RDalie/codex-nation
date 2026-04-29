@@ -1,9 +1,12 @@
 import type { Agent, Eval, Event, Fork, Project, Submission } from "../types.ts";
 import type { AgentHubRepository } from "../db/repository.ts";
 import { badRequest, forbidden, notFound, unauthorized } from "../errors.ts";
-import type { GitForge } from "../gitforge/GitForge.ts";
+import type { GitBundleFile, GitForge, GitRepoRef } from "../gitforge/GitForge.ts";
 import { createId, createShortSuffix, createToken, slugify } from "../ids.ts";
 import { hashToken } from "../security.ts";
+
+const MAX_BUNDLE_FILES = 300;
+const MAX_BUNDLE_BYTES = 5 * 1024 * 1024;
 
 export type LoginResult = {
   agentId: string;
@@ -188,7 +191,12 @@ export class AgentHubService {
 
   async submitFork(
     agent: Agent,
-    input: { forkId?: string; commitSha?: string; primerPath?: string }
+    input: {
+      forkId?: string;
+      commitSha?: string;
+      primerPath?: string;
+      bundle?: { files?: GitBundleFile[] };
+    }
   ): Promise<{ fork: Fork; submission: Submission; eval: Eval }> {
     if (!input.forkId?.trim()) {
       throw badRequest("Fork id is required");
@@ -204,20 +212,35 @@ export class AgentHubService {
     }
 
     const primerPath = input.primerPath?.trim() || "primer.md";
-    const getFileInput: { owner: string; repo: string; path: string; ref?: string } = {
-      owner: fork.owner,
-      repo: fork.repo,
-      path: primerPath
-    };
     const commitSha = input.commitSha?.trim();
-    if (commitSha) {
-      getFileInput.ref = commitSha;
-    }
+    const bundleFiles = normalizeBundle(input.bundle, primerPath);
+    let snapshotRepo: GitRepoRef | null = null;
 
-    const primer = await this.forge.getFile(getFileInput);
+    if (bundleFiles) {
+      if (commitSha) {
+        throw badRequest("Bundle submissions cannot also specify a commit SHA");
+      }
 
-    if (!primer) {
-      throw badRequest("Every submission must include primer.md");
+      snapshotRepo = await this.forge.createSubmissionSnapshot({
+        sourceRepo: fork.repo,
+        targetOwner: agent.giteaUsername,
+        files: bundleFiles
+      });
+    } else {
+      const getFileInput: { owner: string; repo: string; path: string; ref?: string } = {
+        owner: fork.owner,
+        repo: fork.repo,
+        path: primerPath
+      };
+      if (commitSha) {
+        getFileInput.ref = commitSha;
+      }
+
+      const primer = await this.forge.getFile(getFileInput);
+
+      if (!primer) {
+        throw badRequest("Every submission must include primer.md");
+      }
     }
 
     const submittedFork = await this.repository.updateForkStatus(fork.id, "submitted");
@@ -226,6 +249,9 @@ export class AgentHubService {
       forkId: fork.id,
       commitSha: commitSha || null,
       primerPath,
+      snapshotOwner: snapshotRepo?.owner ?? null,
+      snapshotRepo: snapshotRepo?.repo ?? null,
+      snapshotCloneUrl: snapshotRepo?.cloneUrl ?? null,
       status: "queued"
     });
     const evalRecord = await this.repository.createEval({
@@ -246,6 +272,11 @@ export class AgentHubService {
         fork: `${fork.owner}/${fork.repo}`,
         commitSha: submission.commitSha,
         primerPath: submission.primerPath,
+        snapshot:
+          submission.snapshotOwner && submission.snapshotRepo
+            ? `${submission.snapshotOwner}/${submission.snapshotRepo}`
+            : null,
+        snapshotCloneUrl: submission.snapshotCloneUrl,
         evalStatus: evalRecord.status
       }
     });
@@ -297,4 +328,66 @@ function cleanUsername(username: string | undefined): string | null {
   }
 
   return slug;
+}
+
+function normalizeBundle(
+  bundle: { files?: GitBundleFile[] } | undefined,
+  primerPath: string
+): GitBundleFile[] | null {
+  if (!bundle) {
+    return null;
+  }
+
+  if (!Array.isArray(bundle.files) || bundle.files.length === 0) {
+    throw badRequest("Bundle submissions must include at least one file");
+  }
+
+  if (bundle.files.length > MAX_BUNDLE_FILES) {
+    throw badRequest(`Bundle submissions can include at most ${MAX_BUNDLE_FILES} files`);
+  }
+
+  const normalized: GitBundleFile[] = [];
+  const seen = new Set<string>();
+  let totalBytes = 0;
+
+  for (const file of bundle.files) {
+    const path = normalizeBundlePath(file.path);
+    if (seen.has(path)) {
+      throw badRequest(`Bundle includes duplicate file '${path}'`);
+    }
+
+    if (typeof file.contentBase64 !== "string") {
+      throw badRequest(`Bundle file '${path}' must include base64 content`);
+    }
+
+    const content = Buffer.from(file.contentBase64, "base64");
+    totalBytes += content.byteLength;
+    if (totalBytes > MAX_BUNDLE_BYTES) {
+      throw badRequest(`Bundle submissions can include at most ${MAX_BUNDLE_BYTES} bytes`);
+    }
+
+    seen.add(path);
+    normalized.push({ path, contentBase64: content.toString("base64") });
+  }
+
+  const normalizedPrimerPath = normalizeBundlePath(primerPath);
+  if (!seen.has(normalizedPrimerPath)) {
+    throw badRequest("Every submission must include primer.md");
+  }
+
+  return normalized;
+}
+
+function normalizeBundlePath(path: string): string {
+  if (typeof path !== "string") {
+    throw badRequest("Bundle file path must be a string");
+  }
+
+  const normalized = path.replaceAll("\\", "/").replace(/^\/+/, "").replace(/^\.\//, "");
+  const parts = normalized.split("/");
+  if (!normalized || parts.some((part) => !part || part === "." || part === "..") || normalized.includes("\0")) {
+    throw badRequest(`Invalid bundle file path '${path}'`);
+  }
+
+  return normalized;
 }
