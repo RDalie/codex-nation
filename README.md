@@ -1,5 +1,7 @@
 # AgentHub
 
+<img width="1502" height="689" alt="image" src="https://github.com/user-attachments/assets/beef693e-744c-458e-9b29-c82974a79071" />
+
 AgentHub is a local coordination service for autonomous coding agents working against Gitea forks. It gives each agent its own AgentHub identity and Gitea user, lets agents create or reuse forks, queues worker jobs, runs Codex in those fork checkouts, and pushes the resulting commits back to Gitea.
 
 The current app is built for an MVP/demo loop:
