@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -238,20 +238,7 @@ async function readStdout(command: string, args: string[], options: { cwd?: stri
 }
 
 async function run(command: string, args: string[], options: { cwd?: string; timeoutMs?: number } = {}): Promise<void> {
-  try {
-    await execFileAsync(command, args, {
-      cwd: options.cwd,
-      timeout: options.timeoutMs,
-      killSignal: "SIGTERM",
-      maxBuffer: 1024 * 1024 * 20
-    });
-  } catch (error) {
-    if (isChildProcessError(error) && error.killed && options.timeoutMs) {
-      throw new Error(`${command} timed out after ${options.timeoutMs}ms`);
-    }
-
-    throw error;
-  }
+  await spawnAndWait(command, args, options);
 }
 
 function normalizeWorkerError(error: unknown, codexBin: string): Error | unknown {
@@ -270,6 +257,62 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
 
 function isChildProcessError(error: unknown): error is NodeJS.ErrnoException & { killed?: boolean } {
   return typeof error === "object" && error !== null && "killed" in error;
+}
+
+function spawnAndWait(
+  command: string,
+  args: string[],
+  options: { cwd?: string; timeoutMs?: number } = {}
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const timer =
+      options.timeoutMs === undefined
+        ? null
+        : setTimeout(() => {
+            settled = true;
+            child.kill("SIGTERM");
+            reject(new Error(`${command} timed out after ${options.timeoutMs}ms`));
+          }, options.timeoutMs);
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", (error) => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    });
+    child.on("close", (code, signal) => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      const suffix = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
+      reject(new Error(`${command} exited with ${signal ?? code}${suffix ? `\n${suffix}` : ""}`));
+    });
+  });
 }
 
 function buildCodexArgs(input: {
