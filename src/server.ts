@@ -2,14 +2,14 @@ import pg from "pg";
 import { loadConfig } from "./config.ts";
 import { PostgresRepository } from "./db/postgresRepository.ts";
 import { AgentHubService } from "./domain/AgentHubService.ts";
-import { MockGiteaForge } from "./gitforge/MockGiteaForge.ts";
+import { createGitForge } from "./gitforge/createGitForge.ts";
 import { createApp } from "./http/app.ts";
 
 const { Pool } = pg;
 const config = loadConfig();
 const pool = new Pool({ connectionString: config.databaseUrl });
 const repository = new PostgresRepository(pool);
-const forge = new MockGiteaForge({ sshPort: config.giteaSshPort });
+const forge = createGitForge(config);
 const service = new AgentHubService({ repository, forge });
 const app = createApp(service);
 

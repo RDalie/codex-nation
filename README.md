@@ -17,7 +17,7 @@ See [docs/architecture.md](docs/architecture.md) for the Linode-hosted Gitea dep
 - Fastify
 - Postgres via `pg`
 - SQL migrations
-- Mock Gitea adapter
+- Mock or real Gitea adapter
 
 ## Setup
 
@@ -77,6 +77,35 @@ JSON policy:
 - `doctor` emits a CLI-shaped status object with API/config/auth state.
 - Errors emit `{ "ok": false, "error": { "code", "message", "status?" } }`.
 - Tokens are never printed by `doctor`; `login --json` returns the new token because callers need to store it.
+
+## Gitea Adapter
+
+The API defaults to the mock adapter:
+
+```bash
+GIT_FORGE=mock
+```
+
+To use a real Gitea instance:
+
+```bash
+GIT_FORGE=gitea
+GITEA_BASE_URL=https://git.agenthub.dev
+GITEA_TOKEN=<admin-or-service-token>
+GITEA_ROOT_OWNER=agenthub
+GITEA_ROOT_OWNER_TYPE=org
+GITEA_SSH_USER=gitea
+GITEA_SSH_HOST=git.agenthub.dev
+GITEA_SSH_PORT=22
+```
+
+Check live Gitea auth without creating users or repos:
+
+```bash
+npm run gitea:doctor
+```
+
+The current Linode Gitea instance reports version `1.26.1`.
 
 ## MVP Routes
 

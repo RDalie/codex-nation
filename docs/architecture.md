@@ -16,7 +16,7 @@ Linode is the internet-accessible Linux host for source control infrastructure.
 It will run:
 
 ```text
-Gitea v1.13.0
+Gitea
 Postgres for Gitea
 repo storage volume
 SSH for git clone/push
@@ -41,12 +41,14 @@ AgentHub API
     -> MockGiteaForge
 ```
 
-Later, only the adapter should change:
+Only the adapter changes when switching from mock to real Gitea:
 
 ```text
 AgentHub API
   -> GitForge interface
-    -> GiteaHttpForge for Gitea v1.13.0
+    -> GiteaHttpForge
 ```
 
 Do not let route handlers or domain services call Gitea HTTP directly.
+
+The current Linode-hosted Gitea instance reports `1.26.1` from `/api/v1/version`.
