@@ -13,8 +13,8 @@ type AuthenticatedHandler<TRoute extends RouteGenericInterface> = (
   request: FastifyRequest<TRoute>
 ) => Promise<unknown>;
 
-export function createApp(service: AgentHubService): FastifyInstance {
-  const app = Fastify({ logger: true });
+export function createApp(service: AgentHubService, options: { logger?: boolean } = {}): FastifyInstance {
+  const app = Fastify({ logger: options.logger ?? true });
 
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof AppError) {

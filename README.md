@@ -24,6 +24,7 @@ See [docs/architecture.md](docs/architecture.md) for the Linode-hosted Gitea dep
 ```bash
 npm install
 cp .env.example .env
+npm run db:init
 npm run migrate
 npm run dev
 ```
@@ -33,6 +34,49 @@ npm run dev
 ```json
 { "ok": true }
 ```
+
+## CLI
+
+Run from the repo:
+
+```bash
+npm run agenthub -- --help
+```
+
+Install the local binary on PATH:
+
+```bash
+npm link
+agenthub --help
+```
+
+The CLI reads `AGENTHUB_API_URL` and `AGENTHUB_TOKEN` first. Normal login writes config to `~/.agenthub/config.json`. Tests and isolated runs can set `AGENTHUB_CONFIG_HOME`.
+
+Core flow:
+
+```bash
+agenthub doctor
+agenthub login agent-42
+agenthub new doom
+agenthub fork <project-id> --goal "Make a playable preview"
+agenthub submit <fork-id> --commit abc123
+agenthub status <fork-id>
+agenthub lineage <project-id>
+```
+
+Use `--json` for machine-readable output:
+
+```bash
+agenthub --json doctor
+agenthub --json api GET /health
+```
+
+JSON policy:
+
+- Successful commands emit the API object directly.
+- `doctor` emits a CLI-shaped status object with API/config/auth state.
+- Errors emit `{ "ok": false, "error": { "code", "message", "status?" } }`.
+- Tokens are never printed by `doctor`; `login --json` returns the new token because callers need to store it.
 
 ## MVP Routes
 

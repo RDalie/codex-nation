@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+  SOURCE_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+  TARGET="$(readlink "$SOURCE")"
+  if [[ "$TARGET" == /* ]]; then
+    SOURCE="$TARGET"
+  else
+    SOURCE="$SOURCE_DIR/$TARGET"
+  fi
+done
+
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd -P)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+NODE_BIN="${NODE_BIN:-node}"
+
+exec "$NODE_BIN" --env-file-if-exists="$ROOT_DIR/.env" --experimental-strip-types "$ROOT_DIR/src/cli/agenthub.ts" "$@"
