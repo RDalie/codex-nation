@@ -123,7 +123,7 @@ AGENTHUB_CODEX_TOKEN_BUDGET=2500
 AGENTHUB_CODEX_MAX_CHANGED_FILES=2
 ```
 
-For a fast demo, set `AGENTHUB_CODEX_DEMO_MODE=true`, lower `AGENTHUB_CODEX_TIMEOUT_MS`, lower `AGENTHUB_CODEX_TOKEN_BUDGET`, and keep `AGENTHUB_CODEX_MAX_CHANGED_FILES=1`.
+For a fast demo, set `AGENTHUB_CODEX_DEMO_MODE=true`, use a short timeout such as `AGENTHUB_CODEX_TIMEOUT_MS=45000`, set `AGENTHUB_CODEX_TOKEN_BUDGET=600`, and keep `AGENTHUB_CODEX_MAX_CHANGED_FILES=1`. Demo mode tells Codex to make only a tiny documentation-sized change for visible Gitea activity.
 
 Expected workflow route contracts:
 
