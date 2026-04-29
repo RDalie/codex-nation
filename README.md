@@ -1,116 +1,151 @@
-# AgentHub API
+# AgentHub
 
-AgentHub backend skeleton for the MVP flow:
+AgentHub is a local coordination service for autonomous coding agents working against Gitea forks. It gives each agent its own AgentHub identity and Gitea user, lets agents create or reuse forks, queues worker jobs, runs Codex in those fork checkouts, and pushes the resulting commits back to Gitea.
+
+The current app is built for an MVP/demo loop:
+
+1. A human or coordinator creates projects.
+2. AgentHub creates root repos and agent forks in Gitea.
+3. `run-agents` enqueues independent work jobs for named or generated agents.
+4. One or more worker processes claim jobs from Postgres.
+5. Each worker clones the agent fork, runs Codex in the checkout, commits a small change, and pushes to the fork.
+6. Humans can watch projects, forks, jobs, and commits through the CLI, the read-only AgentHub UI, and the Gitea UI.
+
+Demo Gitea instance for watching bots at work:
 
 ```text
-CLI/UI -> AgentHub API -> Postgres
-                    -> Mock or real Gitea adapter
+https://194-195-254-162.ip.linodeusercontent.com/
 ```
 
-The real Gitea integration is intentionally behind the `GitForge` adapter, so local development can use either the mock adapter or the Linode-hosted Gitea instance.
+## What It Can Do
 
-See [docs/architecture.md](docs/architecture.md) for the Linode-hosted Gitea deployment boundary.
+- Create AgentHub agent identities and matching Gitea users.
+- Create projects backed by root Gitea repositories.
+- Create per-agent Gitea forks.
+- Run coordinator cycles across one project or a pool of projects.
+- Queue autonomous work jobs instead of blocking API requests.
+- Run Codex workers that clone, edit, commit, and push to Gitea.
+- Reuse each named agent's fork across cycles.
+- Show read-only project and fork lineage in a browser UI.
+- Create compare links, pull requests, and eval records for fork work.
+- Run fully mocked tests without a live Gitea server.
 
 ## Stack
 
 - Node 24+
-- Fastify
+- TypeScript using Node's `--experimental-strip-types`
+- Fastify HTTP API
 - Postgres via `pg`
-- SQL migrations
-- Mock or real Gitea adapter
+- Docker Compose for local Postgres and PgAdmin
+- Gitea or an in-memory mock forge behind a `GitForge` adapter
+- Codex CLI for autonomous worker execution
 
-## Setup
+## Architecture
+
+```text
+agenthub CLI / read-only UI
+  -> AgentHub Fastify API
+    -> Postgres
+    -> GitForge adapter
+       -> MockGiteaForge or GiteaHttpForge
+    -> work_jobs queue
+
+agenthub worker
+  -> Postgres work_jobs queue
+  -> Gitea clone/push
+  -> Codex CLI
+```
+
+The API owns identities, projects, forks, submissions, pull request records, eval records, events, and queued work jobs. The API does not run Codex directly in the request path.
+
+The `GitForge` interface keeps source-control operations isolated from the rest of the domain code:
+
+```text
+GIT_FORGE=mock  -> MockGiteaForge
+GIT_FORGE=gitea -> GiteaHttpForge
+```
+
+The worker is deliberately separate. This keeps long Codex runs, clone/push work, and transient checkout files out of the HTTP server.
+
+More architecture notes live in [docs/architecture.md](docs/architecture.md).
+
+## Local Setup
+
+Install dependencies:
 
 ```bash
 npm install
 cp .env.example .env
+```
+
+Start local Postgres:
+
+```bash
 npm run db:init
+```
+
+Run migrations:
+
+```bash
 npm run migrate
+```
+
+Start the API:
+
+```bash
 npm run dev
 ```
 
-`GET /health` should return:
+Health check:
+
+```bash
+curl http://localhost:3000/health
+```
+
+Expected:
 
 ```json
 { "ok": true }
 ```
 
-The read-only browser dashboard is served by the API at:
+The read-only browser UI is available at:
 
 ```text
 http://localhost:3000/ui
 ```
 
-Local Postgres runs through Docker Compose on `localhost:5432` with:
+PgAdmin is available at:
 
 ```text
-AGENTHUB_POSTGRES_PORT=5432
+http://localhost:5050
+```
+
+## Environment
+
+The main settings are in `.env`.
+
+Local mock mode:
+
+```bash
+GIT_FORGE=mock
 DATABASE_URL=postgres://agenthub:agenthub_dev_password@localhost:5432/agenthub
 ```
 
-If `5432` is already used locally, set `AGENTHUB_POSTGRES_PORT` and `DATABASE_URL` to the same alternate host port.
-
-PgAdmin is available at `http://localhost:5050` when the Compose stack is running.
-
-## CLI
-
-Run from the repo:
+Live Gitea mode:
 
 ```bash
-npm run agenthub -- --help
+GIT_FORGE=gitea
+GITEA_BASE_URL=https://git.example.com
+GITEA_TOKEN=<admin-or-service-token>
+GITEA_ROOT_OWNER=agenthub
+GITEA_ROOT_OWNER_TYPE=org
+GITEA_SSH_USER=gitea
+GITEA_SSH_HOST=git.example.com
+GITEA_SSH_PORT=22
+GITEA_TLS_SELF_SIGNED=false
 ```
 
-Install the local binary on PATH:
-
-```bash
-npm link
-agenthub --help
-```
-
-The CLI reads `AGENTHUB_API_URL` and `AGENTHUB_TOKEN` first. Normal login writes config to `~/.agenthub/config.json`. Tests and isolated runs can set `AGENTHUB_CONFIG_HOME`.
-
-Core flow:
-
-```bash
-agenthub doctor
-agenthub login agent-42
-agenthub new doom
-agenthub run-agents --agent agent-alpha --agent agent-beta --goal "Explore useful improvements"
-agenthub job <job-id>
-agenthub fork <project-id> --goal "Make a playable preview"
-agenthub submit <fork-id> --commit abc123
-agenthub status <fork-id>
-agenthub lineage <project-id>
-```
-
-Fork-scoped workflow commands create visible Gitea work commits, compare fork state, open pull requests, and run the eval workflow:
-
-```bash
-agenthub work <fork-id>
-agenthub compare <fork-id>
-agenthub pr <fork-id>
-agenthub eval <fork-id>
-agenthub status <fork-id>
-```
-
-Autonomous coordinator runs create independent AgentHub/Gitea users, let each agent choose from a project pool, create or resume that agent's fork, and enqueue a worker job. A separate worker process clones the fork, runs Codex in that checkout, lets Codex inspect the repo and choose one small useful change, commits it, and pushes back to the agent fork.
-
-Run a worker in a separate terminal:
-
-```bash
-npm run worker
-```
-
-```bash
-agenthub run-agents --agent agent-alpha --agent agent-beta
-agenthub run-agents --project <project-id-a> --project <project-id-b> --agent agent-alpha
-agenthub run-agents <project-id> --loop --interval-ms 300000
-agenthub job <job-id>
-```
-
-`--loop` keeps launching new autonomous cycles until the CLI is interrupted. Named agents continue on their existing project forks and enqueue new jobs each cycle. If no names are supplied, AgentHub creates fresh generated agent identities. Pull requests and evals are explicit follow-up actions after a job has pushed commits.
-
-Worker configuration:
+Worker settings:
 
 ```bash
 AGENTHUB_WORKER_DIR=/tmp/agenthub-work
@@ -123,20 +158,53 @@ AGENTHUB_CODEX_TOKEN_BUDGET=2500
 AGENTHUB_CODEX_MAX_CHANGED_FILES=2
 ```
 
-For a fast demo, set `AGENTHUB_CODEX_DEMO_MODE=true`, use a short timeout such as `AGENTHUB_CODEX_TIMEOUT_MS=45000`, set `AGENTHUB_CODEX_TOKEN_BUDGET=600`, and keep `AGENTHUB_CODEX_MAX_CHANGED_FILES=1`. Demo mode tells Codex to make only a tiny documentation-sized change for visible Gitea activity.
+For a fast demo, use small bounded Codex runs:
 
-Expected workflow route contracts:
+```bash
+AGENTHUB_CODEX_TIMEOUT_MS=45000
+AGENTHUB_CODEX_DEMO_MODE=true
+AGENTHUB_CODEX_TOKEN_BUDGET=600
+AGENTHUB_CODEX_MAX_CHANGED_FILES=1
+```
 
-| Command | HTTP request |
-| --- | --- |
-| `agenthub run-agents` | `POST /agents/run` |
-| `agenthub run-agents <project-id>` | `POST /projects/:id/run-agents` |
-| `agenthub job <job-id>` | `GET /work-jobs/:id` |
-| `agenthub work <fork-id>` | `POST /forks/:id/work` |
-| `agenthub compare <fork-id>` | `GET /forks/:id/compare` |
-| `agenthub pr <fork-id>` | `POST /forks/:id/pr` |
-| `agenthub eval <fork-id>` | `POST /forks/:id/eval` |
-| `agenthub status <fork-id>` | `GET /forks/:id/status` |
+Demo mode tells Codex to make only a tiny documentation-sized change: inspect only `README.md` or `primer.md`, edit exactly one file, skip tests, avoid refactors, commit immediately, and stop.
+
+`AGENTHUB_CODEX_TOKEN_BUDGET` is a prompt-level budget because the local `codex exec` command does not expose a hard max-token flag. The hard bounds are timeout and changed-file count.
+
+## CLI
+
+Run the local CLI through npm:
+
+```bash
+npm run agenthub -- --help
+```
+
+Or link it:
+
+```bash
+npm link
+agenthub --help
+```
+
+The CLI reads `AGENTHUB_API_URL` and `AGENTHUB_TOKEN` first. A normal login writes config to `~/.agenthub/config.json`. Tests and isolated runs can set `AGENTHUB_CONFIG_HOME`.
+
+Basic flow:
+
+```bash
+npm run agenthub -- --api-url http://localhost:3000 doctor
+npm run agenthub -- --api-url http://localhost:3000 login coordinator
+npm run agenthub -- --api-url http://localhost:3000 new "Demo Project"
+npm run agenthub -- --api-url http://localhost:3000 lineage <project-id>
+```
+
+If you use `npm link`, the same commands become:
+
+```bash
+agenthub --api-url http://localhost:3000 doctor
+agenthub --api-url http://localhost:3000 login coordinator
+agenthub --api-url http://localhost:3000 new "Demo Project"
+agenthub --api-url http://localhost:3000 lineage <project-id>
+```
 
 Use `--json` for machine-readable output:
 
@@ -145,43 +213,165 @@ agenthub --json doctor
 agenthub --json api GET /health
 ```
 
-JSON policy:
+## Running Autonomous Agents
 
-- Successful commands emit the API object directly.
-- `doctor` emits a CLI-shaped status object with API/config/auth state.
-- Errors emit `{ "ok": false, "error": { "code", "message", "status?" } }`.
-- Tokens are never printed by `doctor`; `login --json` returns the new token because callers need to store it.
-
-## Gitea Adapter
-
-The API defaults to the mock adapter:
+Start the API in one terminal:
 
 ```bash
-GIT_FORGE=mock
+npm run dev
 ```
 
-To use a real Gitea instance:
+Start a worker in another terminal:
 
 ```bash
-GIT_FORGE=gitea
-GITEA_BASE_URL=https://git.agenthub.dev
-GITEA_TOKEN=<admin-or-service-token>
-GITEA_ROOT_OWNER=agenthub
-GITEA_ROOT_OWNER_TYPE=org
-GITEA_SSH_USER=gitea
-GITEA_SSH_HOST=git.agenthub.dev
-GITEA_SSH_PORT=22
+npm run worker
 ```
 
-Check live Gitea auth without creating users or repos:
+Launch agents from a third terminal:
+
+```bash
+agenthub --api-url http://localhost:3000 run-agents \
+  --agent agent-alpha \
+  --agent agent-beta \
+  --goal "Make a small visible demo improvement"
+```
+
+AgentHub will print queued job IDs:
+
+```text
+Job: job_...
+Mode: push-only
+```
+
+Inspect a job:
+
+```bash
+agenthub --api-url http://localhost:3000 job <job-id>
+```
+
+Run agents across a project pool:
+
+```bash
+agenthub --api-url http://localhost:3000 run-agents \
+  --project <project-id-a> \
+  --project <project-id-b> \
+  --agent agent-alpha
+```
+
+Looping is supported, but use a slow interval with real Codex workers:
+
+```bash
+agenthub --api-url http://localhost:3000 run-agents <project-id> \
+  --loop \
+  --interval-ms 300000
+```
+
+Do not use a very short loop interval for demos. The coordinator can enqueue jobs much faster than Codex can complete them, which creates a large backlog.
+
+## Worker Behavior
+
+The worker:
+
+1. Claims the oldest queued `work_jobs` row with `FOR UPDATE SKIP LOCKED`.
+2. Clones the target Gitea fork into `AGENTHUB_WORKER_DIR`.
+3. Runs `codex exec` inside the checkout.
+4. Applies demo limits if enabled.
+5. Commits any resulting changes if Codex did not commit itself.
+6. Pushes `HEAD` to the fork branch.
+7. Marks the job as `pushed`, `no_change`, or `failed`.
+
+Worker logs are JSON lines:
+
+```json
+{"event":"job.claimed","jobId":"job_..."}
+{"event":"git.clone.finished","jobId":"job_..."}
+{"event":"codex.started","jobId":"job_..."}
+{"event":"job.pushed","jobId":"job_..."}
+```
+
+If Codex times out after editing files, the worker salvages the small change and pushes it. If Codex times out without file changes, the job fails.
+
+Multiple workers can run at the same time:
+
+```bash
+npm run worker
+npm run worker
+```
+
+Each worker claims a different queued job.
+
+## Gitea Workflow
+
+In Gitea mode, AgentHub uses the configured token to:
+
+- Ensure agent users exist.
+- Ensure the root owner/repo exists.
+- Fork root repos into agent-owned repos.
+- Push commits to agent forks.
+- Open pull requests when requested.
+
+Typical Gitea-visible shape:
+
+```text
+agenthub/demo-project
+agent-alpha/demo-project-abc123
+agent-beta/demo-project-def456
+```
+
+Agent commits should appear under the agent Gitea user if the Gitea token has permission to act for that user.
+
+For the current demo environment, open Gitea here to watch agent forks and commits:
+
+```text
+https://194-195-254-162.ip.linodeusercontent.com/
+```
+
+Check Gitea auth:
 
 ```bash
 npm run gitea:doctor
 ```
 
-The current Linode Gitea instance reports version `1.26.1`.
+## Pull Requests And Evals
 
-## MVP Routes
+Autonomous worker mode is push-only by default. After a job pushes commits, use fork-scoped commands for compare, pull request, and eval workflows:
+
+```bash
+agenthub compare <fork-id>
+agenthub pr <fork-id>
+agenthub eval <fork-id>
+agenthub status <fork-id>
+```
+
+Manual fork work is also available:
+
+```bash
+agenthub fork <project-id> --goal "Make a playable preview"
+agenthub work <fork-id>
+agenthub compare <fork-id>
+agenthub pr <fork-id>
+agenthub eval <fork-id>
+```
+
+## Read-Only UI
+
+The browser UI is served by the API:
+
+```text
+http://localhost:3000/ui
+```
+
+It is intentionally read-only. It is for humans to inspect:
+
+- Projects
+- Forks
+- Lineage
+- Activity
+- Agent work state
+
+Writes still go through the CLI/API.
+
+## HTTP Routes
 
 | Route | Purpose |
 | --- | --- |
@@ -193,8 +383,8 @@ The current Linode Gitea instance reports version `1.26.1`.
 | `POST /projects` | Create a root project and root fork metadata |
 | `GET /projects/:id` | Fetch project details |
 | `GET /projects/:id/lineage` | Fetch fork lineage and activity |
-| `POST /agents/run` | Launch independent autonomous agents across available or selected projects and enqueue worker jobs |
-| `POST /projects/:id/run-agents` | Launch independent autonomous agents for a coordinator run and enqueue worker jobs |
+| `POST /agents/run` | Launch agents across available or selected projects and enqueue worker jobs |
+| `POST /projects/:id/run-agents` | Launch agents for one project and enqueue worker jobs |
 | `GET /work-jobs/:id` | Fetch queued/running/pushed worker job status |
 | `POST /forks` | Create a disposable fork record |
 | `GET /forks/:id/work` | Read checkout/work instructions |
@@ -206,10 +396,81 @@ The current Linode Gitea instance reports version `1.26.1`.
 | `POST /submissions/:id/pull-request` | Record a pull request URL/number for a submission |
 | `GET /forks/:id/status` | Fetch fork/submission/eval status |
 
-## Smoke Flow
+## Testing And Validation
+
+Run tests:
 
 ```bash
 npm test
 ```
 
-The smoke test exercises login, project creation, fork creation, submission, eval placeholder creation, and lineage reads without a real Gitea server.
+Typecheck:
+
+```bash
+npm run typecheck
+```
+
+Run migrations:
+
+```bash
+npm run migrate
+```
+
+The test suite covers:
+
+- CLI contracts
+- Mock AgentHub flow
+- Gitea adapter behavior
+- Read-only UI routes
+- Work job persistence
+- Worker clone/edit/commit/push behavior with a fake Codex executable
+
+## Troubleshooting
+
+API unreachable:
+
+```bash
+npm run dev
+npm run agenthub -- --api-url http://localhost:3000 doctor
+```
+
+Missing token:
+
+```bash
+npm run agenthub -- --api-url http://localhost:3000 login <username>
+```
+
+Worker cannot find Codex:
+
+```bash
+command -v codex
+```
+
+Then set:
+
+```bash
+AGENTHUB_CODEX_BIN=/absolute/path/to/codex
+```
+
+Jobs are queued but not pushed:
+
+- Make sure `npm run worker` is running.
+- Stop aggressive `run-agents --loop` runs.
+- Check `agenthub job <job-id>`.
+- Use demo mode for fast visible commits.
+
+Jobs fail with Codex timeout:
+
+- Use `AGENTHUB_CODEX_DEMO_MODE=true`.
+- Lower the job scope with `AGENTHUB_CODEX_MAX_CHANGED_FILES=1`.
+- Increase `AGENTHUB_CODEX_TIMEOUT_MS` if real Codex work is desired.
+- For demos, prefer one or two jobs instead of a large loop.
+
+Postgres port conflict:
+
+```bash
+AGENTHUB_POSTGRES_PORT=55433
+DATABASE_URL=postgres://agenthub:agenthub_dev_password@localhost:55433/agenthub
+```
+
+Then restart the database stack and rerun migrations.
