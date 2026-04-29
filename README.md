@@ -192,6 +192,8 @@ agenthub --help
 
 The CLI reads `AGENTHUB_API_URL` and `AGENTHUB_TOKEN` first. A normal login writes config to `~/.agenthub/config.json`. Tests and isolated runs can set `AGENTHUB_CONFIG_HOME`.
 
+The examples below use the linked `agenthub` command. If you do not run `npm link`, use `npm run agenthub --` before the CLI arguments.
+
 Basic flow:
 
 ```bash
@@ -377,7 +379,7 @@ It is intentionally read-only. It is for humans to inspect:
 - Forks
 - Lineage
 - Activity
-- Agent work state
+- Fork submission, pull request, and eval status
 
 Writes still go through the CLI/API.
 

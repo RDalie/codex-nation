@@ -116,7 +116,10 @@ export class CodexGitWorker {
 
     const afterCodexHead = await readStdout("git", ["rev-parse", "HEAD"], { cwd: worktree });
     const status = await readStdout("git", ["status", "--porcelain"], { cwd: worktree });
-    const changedFileCount = countChangedFiles(status);
+    const committedChangedFiles =
+      afterCodexHead === beforeHead ? [] : await readChangedFiles(worktree, beforeHead, afterCodexHead);
+    const changedFileSet = new Set([...committedChangedFiles, ...readStatusChangedFiles(status)]);
+    const changedFileCount = changedFileSet.size;
     if (changedFileCount > this.config.codexMaxChangedFiles) {
       throw new Error(
         `Codex changed ${changedFileCount} files, exceeding AGENTHUB_CODEX_MAX_CHANGED_FILES=${this.config.codexMaxChangedFiles}`
@@ -387,7 +390,7 @@ function buildCodexPrompt(prompt: string, config: AppConfig): string {
   return `${prompt}\n${limits.join("\n")}`;
 }
 
-function countChangedFiles(status: string): number {
+function readStatusChangedFiles(status: string): string[] {
   const files = new Set<string>();
   for (const line of status.split("\n")) {
     const cleaned = line.trim();
@@ -398,7 +401,7 @@ function countChangedFiles(status: string): number {
     files.add(cleaned.slice(2).trim());
   }
 
-  return files.size;
+  return [...files];
 }
 
 function gitExtraHeaderKey(baseUrl: string): string | null {
