@@ -8,6 +8,8 @@ import type { Agent, Fork, Project, WorkJob } from "../types.ts";
 
 const execFileAsync = promisify(execFile);
 
+class CommandTimeoutError extends Error {}
+
 export type CodexWorkerResult = {
   job: WorkJob;
   pushed: boolean;
@@ -99,8 +101,18 @@ export class CodexGitWorker {
       maxChangedFiles: this.config.codexMaxChangedFiles,
       demoMode: this.config.codexDemoMode
     });
-    await run(this.config.codexBin, codexArgs, { timeoutMs: this.config.codexTimeoutMs });
-    this.log(job, "codex.finished", { outputPath });
+    let codexTimedOut = false;
+    try {
+      await run(this.config.codexBin, codexArgs, { timeoutMs: this.config.codexTimeoutMs });
+      this.log(job, "codex.finished", { outputPath });
+    } catch (error) {
+      if (!(error instanceof CommandTimeoutError)) {
+        throw error;
+      }
+
+      codexTimedOut = true;
+      this.log(job, "codex.timed_out", { outputPath, timeoutMs: this.config.codexTimeoutMs });
+    }
 
     const afterCodexHead = await readStdout("git", ["rev-parse", "HEAD"], { cwd: worktree });
     const status = await readStdout("git", ["status", "--porcelain"], { cwd: worktree });
@@ -116,6 +128,10 @@ export class CodexGitWorker {
         : await this.commitWorkerChanges({ worktree, project, agent, status });
 
     if (!finalHead) {
+      if (codexTimedOut) {
+        throw new Error(`${this.config.codexBin} timed out after ${this.config.codexTimeoutMs}ms without file changes`);
+      }
+
       const message = await readOptionalFile(outputPath);
       const noChange = await this.repository.updateWorkJob({
         id: job.id,
@@ -142,7 +158,8 @@ export class CodexGitWorker {
       result: {
         worktree,
         changedFiles,
-        codexMessage: message
+        codexMessage: message,
+        codexTimedOut
       },
       completedAt: new Date().toISOString()
     });
@@ -255,10 +272,6 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return typeof error === "object" && error !== null && "code" in error;
 }
 
-function isChildProcessError(error: unknown): error is NodeJS.ErrnoException & { killed?: boolean } {
-  return typeof error === "object" && error !== null && "killed" in error;
-}
-
 function spawnAndWait(
   command: string,
   args: string[],
@@ -278,7 +291,7 @@ function spawnAndWait(
         : setTimeout(() => {
             settled = true;
             child.kill("SIGTERM");
-            reject(new Error(`${command} timed out after ${options.timeoutMs}ms`));
+            reject(new CommandTimeoutError(`${command} timed out after ${options.timeoutMs}ms`));
           }, options.timeoutMs);
 
     child.stdout.on("data", (chunk) => {
@@ -342,6 +355,24 @@ function buildCodexArgs(input: {
 }
 
 function buildCodexPrompt(prompt: string, config: AppConfig): string {
+  if (config.codexDemoMode) {
+    return [
+      prompt,
+      "",
+      "DEMO OVERRIDE: make the smallest possible visible change.",
+      `Hard budget target: stay under about ${config.codexTokenBudget} total tokens.`,
+      `Hard change limit: change exactly 1 file and no more than ${config.codexMaxChangedFiles} file total.`,
+      "",
+      "Do this:",
+      "1. Inspect only README.md and primer.md if they exist.",
+      "2. Edit exactly one of those files.",
+      "3. Add or improve one short sentence or one short bullet that is coherent with the existing text.",
+      "4. Do not run tests, do not inspect source trees, do not refactor, do not create new files.",
+      "5. Commit immediately with a concrete short commit message.",
+      "6. Stop after the commit."
+    ].join("\n");
+  }
+
   const limits = [
     "",
     "Per-run limits:",
@@ -352,16 +383,6 @@ function buildCodexPrompt(prompt: string, config: AppConfig): string {
     "- Skip expensive or full-suite checks; run only a targeted check if it is obvious and fast.",
     "- If the repository is unclear after a quick look, make a minimal documentation or cleanup change and stop."
   ];
-
-  if (config.codexDemoMode) {
-    limits.push(
-      "",
-      "Demo mode:",
-      "- Optimize for speed and visible Gitea activity.",
-      "- Do not spend time searching for an ideal task.",
-      "- Finish with one small commit as soon as a reasonable improvement is available."
-    );
-  }
 
   return `${prompt}\n${limits.join("\n")}`;
 }
