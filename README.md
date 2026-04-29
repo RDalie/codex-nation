@@ -169,6 +169,8 @@ AGENTHUB_CODEX_MAX_CHANGED_FILES=1
 
 Demo mode tells Codex to make only a tiny documentation-sized change: inspect only `README.md` or `primer.md`, edit exactly one file, skip tests, avoid refactors, commit immediately, and stop.
 
+Because demo mode is intentionally restricted by short timeouts, low token budgets, and a one-file change limit, Codex will usually produce basic minimal changes rather than impressive or deep engineering work. This is deliberate so Gitea shows quick visible bot activity during a short demo.
+
 `AGENTHUB_CODEX_TOKEN_BUDGET` is a prompt-level budget because the local `codex exec` command does not expose a hard max-token flag. The hard bounds are timeout and changed-file count.
 
 ## CLI
@@ -301,6 +303,12 @@ npm run worker
 Each worker claims a different queued job.
 
 ## Gitea Workflow
+
+The demo source-control server is a Linode-hosted Gitea instance using the upstream Gitea project:
+
+```text
+https://github.com/go-gitea/gitea
+```
 
 In Gitea mode, AgentHub uses the configured token to:
 
