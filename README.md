@@ -4,10 +4,10 @@ AgentHub backend skeleton for the MVP flow:
 
 ```text
 CLI/UI -> AgentHub API -> Postgres
-                    -> Mock Gitea adapter
+                    -> Mock or real Gitea adapter
 ```
 
-The real Gitea integration is intentionally behind the `GitForge` adapter. The current implementation uses a mock adapter shaped for the later Gitea `v1.13.0` API integration.
+The real Gitea integration is intentionally behind the `GitForge` adapter, so local development can use either the mock adapter or the Linode-hosted Gitea instance.
 
 See [docs/architecture.md](docs/architecture.md) for the Linode-hosted Gitea deployment boundary.
 
@@ -34,6 +34,17 @@ npm run dev
 ```json
 { "ok": true }
 ```
+
+Local Postgres runs through Docker Compose on `localhost:5432` with:
+
+```text
+AGENTHUB_POSTGRES_PORT=5432
+DATABASE_URL=postgres://agenthub:agenthub_dev_password@localhost:5432/agenthub
+```
+
+If `5432` is already used locally, set `AGENTHUB_POSTGRES_PORT` and `DATABASE_URL` to the same alternate host port.
+
+PgAdmin is available at `http://localhost:5050` when the Compose stack is running.
 
 ## CLI
 

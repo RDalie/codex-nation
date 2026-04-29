@@ -16,7 +16,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   return {
     gitForge: parseGitForge(env.GIT_FORGE),
     port: Number(env.PORT ?? 3000),
-    databaseUrl: env.DATABASE_URL ?? "postgres://agenthub:agenthub@localhost:5432/agenthub",
+    databaseUrl: env.DATABASE_URL ?? "postgres://agenthub:agenthub_dev_password@localhost:5432/agenthub",
     giteaBaseUrl: normalizeUrl(env.GITEA_BASE_URL ?? "https://git.agenthub.dev"),
     giteaToken: env.GITEA_TOKEN ?? null,
     giteaRootOwner: env.GITEA_ROOT_OWNER ?? "agenthub",

@@ -2,20 +2,41 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PG_BIN="${PG_BIN:-/Library/PostgreSQL/16/bin}"
-DATA_DIR="${AGENTHUB_PGDATA:-$ROOT_DIR/.agenthub-postgres/data}"
-PORT="${AGENTHUB_PG_PORT:-55432}"
-LOG_FILE="$ROOT_DIR/.agenthub-postgres/server.log"
 
-if [[ ! -d "$DATA_DIR/base" ]]; then
-  echo "Postgres data directory not initialized. Run npm run db:init first." >&2
+cd "$ROOT_DIR"
+export PATH="/Applications/Docker.app/Contents/Resources/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+if command -v docker >/dev/null 2>&1; then
+  DOCKER=(docker)
+elif [[ -x /opt/homebrew/bin/docker ]]; then
+  DOCKER=(/opt/homebrew/bin/docker)
+elif [[ -x /usr/local/bin/docker ]]; then
+  DOCKER=(/usr/local/bin/docker)
+else
+  echo "Docker is required. Install Docker Desktop." >&2
   exit 1
 fi
 
-if "$PG_BIN/pg_ctl" -D "$DATA_DIR" status >/dev/null 2>&1; then
-  echo "AgentHub Postgres already running"
-  exit 0
+if "${DOCKER[@]}" compose version >/dev/null 2>&1; then
+  DOCKER_COMPOSE=("${DOCKER[@]}" compose)
+elif command -v docker-compose >/dev/null 2>&1; then
+  DOCKER_COMPOSE=(docker-compose)
+else
+  echo "Docker Compose is required. Install Docker Desktop or docker-compose." >&2
+  exit 1
 fi
 
-mkdir -p "$(dirname "$LOG_FILE")"
-"$PG_BIN/pg_ctl" -D "$DATA_DIR" -l "$LOG_FILE" -o "-p $PORT -h 127.0.0.1" start
+"${DOCKER_COMPOSE[@]}" up -d postgres pgadmin
+
+for _ in {1..30}; do
+  if "${DOCKER_COMPOSE[@]}" exec -T postgres pg_isready -U agenthub -d agenthub >/dev/null 2>&1; then
+    HOST_PORT="$("${DOCKER_COMPOSE[@]}" port postgres 5432 | awk -F: '{print $NF}')"
+    echo "AgentHub Postgres is ready on localhost:$HOST_PORT"
+    echo "DATABASE_URL=postgres://agenthub:agenthub_dev_password@localhost:$HOST_PORT/agenthub"
+    exit 0
+  fi
+  sleep 1
+done
+
+echo "Timed out waiting for AgentHub Postgres to become healthy" >&2
+exit 1
