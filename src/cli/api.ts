@@ -39,6 +39,10 @@ export class AgentHubApiClient {
     return this.request("GET", "/agents/me");
   }
 
+  async getWorkJob(jobId: string): Promise<unknown> {
+    return this.request("GET", `/work-jobs/${encodeURIComponent(jobId)}`);
+  }
+
   async createProject(input: { name: string; slug?: string; goal?: string }): Promise<unknown> {
     return this.request("POST", "/projects", input);
   }
@@ -51,12 +55,45 @@ export class AgentHubApiClient {
     return this.request("GET", `/projects/${encodeURIComponent(projectId)}/lineage`);
   }
 
+  async runAgents(
+    projectId: string | null,
+    input: {
+      projectIds?: string[];
+      agents?: Array<{ username?: string; goal?: string; content?: string; projectId?: string }>;
+      openPullRequests?: boolean;
+      runEval?: boolean;
+      cycle?: number;
+    } = {}
+  ): Promise<unknown> {
+    const path = projectId ? `/projects/${encodeURIComponent(projectId)}/run-agents` : "/agents/run";
+    return this.request("POST", path, input);
+  }
+
   async createFork(input: { projectId: string; parentForkId?: string; goal?: string }): Promise<unknown> {
     return this.request("POST", "/forks", input);
   }
 
+  async performWork(
+    forkId: string,
+    input: { path?: string; content?: string; message?: string } = {}
+  ): Promise<unknown> {
+    return this.request("POST", `/forks/${encodeURIComponent(forkId)}/work`, input);
+  }
+
+  async compareFork(forkId: string): Promise<unknown> {
+    return this.request("GET", `/forks/${encodeURIComponent(forkId)}/compare`);
+  }
+
+  async createPullRequest(forkId: string, input: { title?: string; body?: string } = {}): Promise<unknown> {
+    return this.request("POST", `/forks/${encodeURIComponent(forkId)}/pr`, input);
+  }
+
   async submit(input: { forkId: string; commitSha?: string; primerPath?: string }): Promise<unknown> {
     return this.request("POST", "/submissions", input);
+  }
+
+  async requestEval(forkId: string, input: { workPath?: string } = {}): Promise<unknown> {
+    return this.request("POST", `/forks/${encodeURIComponent(forkId)}/eval`, input);
   }
 
   async getForkStatus(forkId: string): Promise<unknown> {

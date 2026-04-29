@@ -16,7 +16,7 @@ export async function runCli(argv = process.argv, io: CliIo = defaultIo): Promis
 
   program
     .name("agenthub")
-    .description("AgentHub CLI for login, project creation, disposable forks, and submissions.")
+    .description("AgentHub CLI for login, project creation, disposable forks, workflow, and submissions.")
     .version("0.1.0")
     .option("--json", "emit stable JSON")
     .option("--api-url <url>", "AgentHub API URL for this command");
@@ -144,6 +144,80 @@ export async function runCli(argv = process.argv, io: CliIo = defaultIo): Promis
     });
 
   program
+    .command("job")
+    .description("Read an autonomous work job")
+    .argument("<job-id>", "work job id")
+    .action(async (jobId: string) => {
+      const context = await createContext(program, { requireToken: true });
+      const result = await new AgentHubApiClient({ apiUrl: context.apiUrl, token: context.token }).getWorkJob(jobId);
+      writeOutput(io, context.mode, result, formatWorkJob(result));
+    });
+
+  program
+    .command("run-agents")
+    .description("Ask the coordinator to launch independent agents across a project pool")
+    .argument("[project-id]", "optional project id; omit to let agents choose from all projects")
+    .option("--project <project-id>", "project id in the autonomous pool; repeat for multiple projects", collectOption, [])
+    .option("--agent <username>", "agent username to launch; repeat for multiple agents", collectOption, [])
+    .option("--goal <goal>", "broad shared goal; agents choose their own work within it")
+    .option("--pr", "reserved for future autonomous PR runs; current worker runs are push-only")
+    .option("--eval", "reserved for future autonomous eval runs; current worker runs are push-only")
+    .option("--loop", "keep launching autonomous cycles until interrupted")
+    .option("--interval-ms <ms>", "delay between --loop cycles", parseNonNegativeInteger, 300000)
+    .action(
+      async (
+        projectId: string | undefined,
+        options: {
+          project?: string[];
+          agent?: string[];
+          goal?: string;
+          pr?: boolean;
+          eval?: boolean;
+          loop?: boolean;
+          intervalMs?: number;
+        }
+      ) => {
+        const context = await createContext(program, { requireToken: true });
+        if (options.loop && context.mode === "json") {
+          throw new Error("--loop cannot be combined with --json; run one cycle at a time for machine-readable output.");
+        }
+
+        const client = new AgentHubApiClient({ apiUrl: context.apiUrl, token: context.token });
+        let cycle = 0;
+        let stopping = false;
+        const stop = (): void => {
+          stopping = true;
+        };
+
+        if (options.loop) {
+          process.once("SIGINT", stop);
+        }
+
+        try {
+          do {
+            cycle += 1;
+            const result = await client.runAgents(projectId ?? null, buildRunAgentsInput(options, cycle));
+            writeOutput(io, context.mode, result, formatAutonomousRun(result, cycle));
+
+            if (!options.loop || stopping) {
+              break;
+            }
+
+            await sleep(options.intervalMs ?? 300000);
+          } while (!stopping);
+
+          if (options.loop) {
+            writeHuman(io, `Stopped autonomous run after ${cycle} cycle${cycle === 1 ? "" : "s"}.`);
+          }
+        } finally {
+          if (options.loop) {
+            process.off("SIGINT", stop);
+          }
+        }
+      }
+    );
+
+  program
     .command("fork")
     .description("Create a disposable fork for a project")
     .argument("<project-id>", "project id")
@@ -164,6 +238,64 @@ export async function runCli(argv = process.argv, io: CliIo = defaultIo): Promis
     });
 
   program
+    .command("work")
+    .description("Create a visible work commit in a fork")
+    .argument("<fork-id>", "fork id")
+    .option("--path <path>", "file path to write", "agenthub-work.md")
+    .option("--message <message>", "commit message")
+    .option("--content <content>", "file content; defaults to generated AgentHub work notes")
+    .action(async (forkId: string, options: { path?: string; message?: string; content?: string }) => {
+      const context = await createContext(program, { requireToken: true });
+      const input: { path?: string; message?: string; content?: string } = {};
+      if (options.path) {
+        input.path = options.path;
+      }
+      if (options.message) {
+        input.message = options.message;
+      }
+      if (options.content) {
+        input.content = options.content;
+      }
+      const result = await new AgentHubApiClient({ apiUrl: context.apiUrl, token: context.token }).performWork(
+        forkId,
+        input
+      );
+      writeOutput(io, context.mode, result, formatWork(result));
+    });
+
+  program
+    .command("compare")
+    .description("Read comparison details for a fork")
+    .argument("<fork-id>", "fork id")
+    .action(async (forkId: string) => {
+      const context = await createContext(program);
+      const result = await new AgentHubApiClient({ apiUrl: context.apiUrl, token: context.token }).compareFork(forkId);
+      writeOutput(io, context.mode, result, formatCompare(result));
+    });
+
+  program
+    .command("pr")
+    .description("Open or read the pull request for a fork")
+    .argument("<fork-id>", "fork id")
+    .option("--title <title>", "pull request title")
+    .option("--body <body>", "pull request body")
+    .action(async (forkId: string, options: { title?: string; body?: string }) => {
+      const context = await createContext(program, { requireToken: true });
+      const input: { title?: string; body?: string } = {};
+      if (options.title) {
+        input.title = options.title;
+      }
+      if (options.body) {
+        input.body = options.body;
+      }
+      const result = await new AgentHubApiClient({ apiUrl: context.apiUrl, token: context.token }).createPullRequest(
+        forkId,
+        input
+      );
+      writeOutput(io, context.mode, result, formatPullRequest(result));
+    });
+
+  program
     .command("submit")
     .description("Submit a fork for evaluation; primer.md is required")
     .argument("<fork-id>", "fork id")
@@ -181,6 +313,24 @@ export async function runCli(argv = process.argv, io: CliIo = defaultIo): Promis
 
       const result = await new AgentHubApiClient({ apiUrl: context.apiUrl, token: context.token }).submit(input);
       writeOutput(io, context.mode, result, formatSubmission(result));
+    });
+
+  program
+    .command("eval")
+    .description("Request evaluation for a fork and print eval status")
+    .argument("<fork-id>", "fork id")
+    .option("--work-path <path>", "work file path to evaluate", "agenthub-work.md")
+    .action(async (forkId: string, options: { workPath?: string }) => {
+      const context = await createContext(program, { requireToken: true });
+      const input: { workPath?: string } = {};
+      if (options.workPath) {
+        input.workPath = options.workPath;
+      }
+      const result = await new AgentHubApiClient({ apiUrl: context.apiUrl, token: context.token }).requestEval(
+        forkId,
+        input
+      );
+      writeOutput(io, context.mode, result, formatStatus(result));
     });
 
   program
@@ -258,6 +408,76 @@ function writeOutput(io: CliIo, mode: OutputMode, json: unknown, human: string):
   writeHuman(io, human);
 }
 
+function collectOption(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+function parseNonNegativeInteger(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error("Expected a non-negative integer");
+  }
+
+  return parsed;
+}
+
+function buildRunAgentsInput(
+  options: { project?: string[]; agent?: string[]; goal?: string; pr?: boolean; eval?: boolean },
+  cycle: number
+): {
+  projectIds?: string[];
+  agents?: Array<{ username?: string; goal?: string }>;
+  openPullRequests?: boolean;
+  runEval?: boolean;
+  cycle: number;
+} {
+  const usernames = (options.agent ?? []).map((username) => username.trim()).filter(Boolean);
+  const projectIds = (options.project ?? []).map((projectId) => projectId.trim()).filter(Boolean);
+  const goal = options.goal?.trim();
+  const input: {
+    projectIds?: string[];
+    agents?: Array<{ username?: string; goal?: string }>;
+    openPullRequests?: boolean;
+    runEval?: boolean;
+    cycle: number;
+  } = { cycle };
+
+  if (projectIds.length > 0) {
+    input.projectIds = projectIds;
+  }
+
+  if (options.pr || options.eval) {
+    input.openPullRequests = true;
+  }
+
+  if (options.eval) {
+    input.runEval = true;
+  }
+
+  if (usernames.length > 0) {
+    input.agents = usernames.map((username) => {
+      const agent: { username?: string; goal?: string } = { username };
+      if (goal) {
+        agent.goal = goal;
+      }
+      return agent;
+    });
+    return input;
+  }
+
+  if (goal) {
+    input.agents = [{ goal }, { goal }];
+  }
+
+  return input;
+}
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
 function formatDoctor(result: Record<string, unknown>): string {
   const token = result.token as { available?: boolean; source?: string };
   const lines = [
@@ -292,6 +512,61 @@ function formatForkCreated(result: unknown): string {
   return [`Fork: ${data.owner}/${data.repo}`, `Fork ID: ${data.id}`, `Clone: ${data.cloneUrl}`].join("\n");
 }
 
+function formatWork(result: unknown): string {
+  const data = result as {
+    fork?: { id?: string; owner?: string; repo?: string; cloneUrl?: string; goal?: string | null; status?: string };
+    work?: { path?: string; branch?: string; commitSha?: string | null; commitUrl?: string | null };
+    steps?: Array<{ name?: string; detail?: string }>;
+  };
+  const steps = data.steps?.map((step) => `- ${step.name}: ${step.detail}`).join("\n") ?? "";
+
+  return [
+    `Fork: ${data.fork?.owner}/${data.fork?.repo}`,
+    `Fork ID: ${data.fork?.id}`,
+    `Status: ${data.fork?.status ?? "unknown"}`,
+    `Goal: ${data.fork?.goal ?? "none"}`,
+    `Clone: ${data.fork?.cloneUrl}`,
+    `File: ${data.work?.path ?? "pending"}`,
+    `Branch: ${data.work?.branch ?? "default"}`,
+    `Commit: ${data.work?.commitSha ?? "pending"}`,
+    `Commit URL: ${data.work?.commitUrl ?? "pending"}`,
+    steps ? `Steps:\n${steps}` : "Steps: none"
+  ].join("\n");
+}
+
+function formatCompare(result: unknown): string {
+  const data = result as {
+    fork?: { owner?: string; repo?: string };
+    base?: { owner?: string; repo?: string; branch?: string };
+    head?: { owner?: string; repo?: string; branch?: string };
+    compareUrl?: string;
+    pullRequest?: { number?: number | null; url?: string | null } | null;
+  };
+
+  return [
+    `Compare: ${data.base?.owner}/${data.base?.repo}@${data.base?.branch ?? "main"}...${data.head?.owner ?? data.fork?.owner}:${data.head?.branch ?? "main"}`,
+    `URL: ${data.compareUrl ?? "pending"}`,
+    `Pull request: ${data.pullRequest?.number ? `#${data.pullRequest.number}` : "none"}`,
+    `Pull request URL: ${data.pullRequest?.url ?? "pending"}`
+  ].join("\n");
+}
+
+function formatPullRequest(result: unknown): string {
+  const data = result as {
+    fork?: { owner?: string; repo?: string };
+    pullRequest?: { number?: number; status?: string; url?: string };
+    compareUrl?: string;
+  };
+
+  return [
+    `Fork: ${data.fork?.owner}/${data.fork?.repo}`,
+    `Pull request: ${data.pullRequest?.number ? `#${data.pullRequest.number}` : "pending"}`,
+    `Status: ${data.pullRequest?.status ?? "unknown"}`,
+    `URL: ${data.pullRequest?.url ?? "pending"}`,
+    `Compare: ${data.compareUrl ?? "pending"}`
+  ].join("\n");
+}
+
 function formatSubmission(result: unknown): string {
   const data = result as {
     fork?: { owner?: string; repo?: string; status?: string };
@@ -324,11 +599,91 @@ function formatLineage(result: unknown): string {
   return lines.join("\n");
 }
 
+function formatAutonomousRun(result: unknown, cycle = 1): string {
+  const data = result as {
+    project?: { id?: string; slug?: string; rootOwner?: string; rootRepo?: string } | null;
+    projects?: Array<{ id?: string; slug?: string; rootOwner?: string; rootRepo?: string }>;
+    coordinator?: { username?: string };
+    runs?: Array<{
+      agent?: { username?: string };
+      identitySeed?: number;
+      project?: { id?: string; slug?: string; rootOwner?: string; rootRepo?: string };
+      fork?: { id?: string; owner?: string; repo?: string; status?: string };
+      work?: { path?: string; commitSha?: string | null; commitUrl?: string | null };
+      job?: { id?: string; status?: string; commitSha?: string | null; error?: string | null };
+      eval?: { status?: string; previewUrl?: string | null } | null;
+      pullRequest?: { number?: number | null; url?: string | null } | null;
+      compareUrl?: string | null;
+    }>;
+  };
+  const runs = data.runs ?? [];
+  const projects = data.projects ?? [];
+  const projectLabel = data.project
+    ? `${data.project.rootOwner}/${data.project.rootRepo}`
+    : `${projects.length} project${projects.length === 1 ? "" : "s"}`;
+  const lines = [
+    `Cycle: ${cycle}`,
+    `Project pool: ${projectLabel}`,
+    `Coordinator: ${data.coordinator?.username ?? "unknown"}`,
+    `Agents: ${runs.length}`
+  ];
+
+  for (const run of runs) {
+    lines.push(
+      `- ${run.agent?.username ?? "agent"} seed=${run.identitySeed ?? "n/a"} on ${run.project?.rootOwner}/${run.project?.rootRepo} -> ${run.fork?.owner}/${run.fork?.repo} ${run.fork?.status ?? "unknown"}`
+    );
+    lines.push(`  Job: ${run.job?.id ?? "none"} ${run.job?.status ?? "unknown"}`);
+    if (run.job?.commitSha) {
+      lines.push(`  Commit: ${run.job.commitSha}`);
+    }
+    if (run.work) {
+      lines.push(`  Work: ${run.work.path ?? "pending"} @ ${run.work.commitSha ?? "pending"}`);
+    }
+    if (run.pullRequest || run.eval) {
+      lines.push(`  Pull request: ${run.pullRequest?.number ? `#${run.pullRequest.number}` : "none"}`);
+      lines.push(`  PR URL: ${run.pullRequest?.url ?? "none"}`);
+      lines.push(`  Eval: ${run.eval?.status ?? "none"}`);
+    } else {
+      lines.push("  Mode: push-only");
+    }
+  }
+
+  return lines.join("\n");
+}
+
+function formatWorkJob(result: unknown): string {
+  const data = result as {
+    id?: string;
+    status?: string;
+    forkId?: string;
+    identitySeed?: number;
+    commitSha?: string | null;
+    error?: string | null;
+    result?: { changedFiles?: string[] } | null;
+  };
+  const lines = [
+    `Job: ${data.id}`,
+    `Status: ${data.status}`,
+    `Fork ID: ${data.forkId}`,
+    `Seed: ${data.identitySeed}`,
+    `Commit: ${data.commitSha ?? "pending"}`
+  ];
+  if (data.result?.changedFiles?.length) {
+    lines.push(`Changed files: ${data.result.changedFiles.join(", ")}`);
+  }
+  if (data.error) {
+    lines.push(`Error: ${data.error}`);
+  }
+
+  return lines.join("\n");
+}
+
 function formatStatus(result: unknown): string {
   const data = result as {
     fork?: { owner?: string; repo?: string; status?: string };
     submission?: { status?: string } | null;
     eval?: { status?: string; previewUrl?: string | null } | null;
+    pullRequest?: { number?: number | null; url?: string | null } | null;
   };
 
   return [
@@ -336,7 +691,9 @@ function formatStatus(result: unknown): string {
     `Fork status: ${data.fork?.status}`,
     `Submission: ${data.submission?.status ?? "none"}`,
     `Eval: ${data.eval?.status ?? "none"}`,
-    `Preview: ${data.eval?.previewUrl ?? "pending"}`
+    `Preview: ${data.eval?.previewUrl ?? "pending"}`,
+    `Pull request: ${data.pullRequest?.number ? `#${data.pullRequest.number}` : "none"}`,
+    `Pull request URL: ${data.pullRequest?.url ?? "pending"}`
   ].join("\n");
 }
 

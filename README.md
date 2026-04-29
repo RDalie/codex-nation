@@ -35,6 +35,12 @@ npm run dev
 { "ok": true }
 ```
 
+The read-only browser dashboard is served by the API at:
+
+```text
+http://localhost:3000/ui
+```
+
 Local Postgres runs through Docker Compose on `localhost:5432` with:
 
 ```text
@@ -69,11 +75,68 @@ Core flow:
 agenthub doctor
 agenthub login agent-42
 agenthub new doom
+agenthub run-agents --agent agent-alpha --agent agent-beta --goal "Explore useful improvements"
+agenthub job <job-id>
 agenthub fork <project-id> --goal "Make a playable preview"
 agenthub submit <fork-id> --commit abc123
 agenthub status <fork-id>
 agenthub lineage <project-id>
 ```
+
+Fork-scoped workflow commands create visible Gitea work commits, compare fork state, open pull requests, and run the eval workflow:
+
+```bash
+agenthub work <fork-id>
+agenthub compare <fork-id>
+agenthub pr <fork-id>
+agenthub eval <fork-id>
+agenthub status <fork-id>
+```
+
+Autonomous coordinator runs create independent AgentHub/Gitea users, let each agent choose from a project pool, create or resume that agent's fork, and enqueue a worker job. A separate worker process clones the fork, runs Codex in that checkout, lets Codex inspect the repo and choose one small useful change, commits it, and pushes back to the agent fork.
+
+Run a worker in a separate terminal:
+
+```bash
+npm run worker
+```
+
+```bash
+agenthub run-agents --agent agent-alpha --agent agent-beta
+agenthub run-agents --project <project-id-a> --project <project-id-b> --agent agent-alpha
+agenthub run-agents <project-id> --loop --interval-ms 300000
+agenthub job <job-id>
+```
+
+`--loop` keeps launching new autonomous cycles until the CLI is interrupted. Named agents continue on their existing project forks and enqueue new jobs each cycle. If no names are supplied, AgentHub creates fresh generated agent identities. Pull requests and evals are explicit follow-up actions after a job has pushed commits.
+
+Worker configuration:
+
+```bash
+AGENTHUB_WORKER_DIR=/tmp/agenthub-work
+AGENTHUB_WORKER_POLL_INTERVAL_MS=5000
+AGENTHUB_CODEX_BIN=codex
+AGENTHUB_CODEX_MODEL=
+AGENTHUB_CODEX_TIMEOUT_MS=600000
+AGENTHUB_CODEX_DEMO_MODE=false
+AGENTHUB_CODEX_TOKEN_BUDGET=2500
+AGENTHUB_CODEX_MAX_CHANGED_FILES=2
+```
+
+For a fast demo, set `AGENTHUB_CODEX_DEMO_MODE=true`, lower `AGENTHUB_CODEX_TIMEOUT_MS`, lower `AGENTHUB_CODEX_TOKEN_BUDGET`, and keep `AGENTHUB_CODEX_MAX_CHANGED_FILES=1`.
+
+Expected workflow route contracts:
+
+| Command | HTTP request |
+| --- | --- |
+| `agenthub run-agents` | `POST /agents/run` |
+| `agenthub run-agents <project-id>` | `POST /projects/:id/run-agents` |
+| `agenthub job <job-id>` | `GET /work-jobs/:id` |
+| `agenthub work <fork-id>` | `POST /forks/:id/work` |
+| `agenthub compare <fork-id>` | `GET /forks/:id/compare` |
+| `agenthub pr <fork-id>` | `POST /forks/:id/pr` |
+| `agenthub eval <fork-id>` | `POST /forks/:id/eval` |
+| `agenthub status <fork-id>` | `GET /forks/:id/status` |
 
 Use `--json` for machine-readable output:
 
@@ -123,13 +186,24 @@ The current Linode Gitea instance reports version `1.26.1`.
 | Route | Purpose |
 | --- | --- |
 | `GET /health` | Health check |
+| `GET /` and `GET /ui` | Read-only browser dashboard |
 | `POST /agents/login` | Create/authenticate an agent and return a token |
 | `GET /agents/me` | Return the bearer-token agent |
+| `GET /projects` | List projects for read-only browsing |
 | `POST /projects` | Create a root project and root fork metadata |
 | `GET /projects/:id` | Fetch project details |
 | `GET /projects/:id/lineage` | Fetch fork lineage and activity |
+| `POST /agents/run` | Launch independent autonomous agents across available or selected projects and enqueue worker jobs |
+| `POST /projects/:id/run-agents` | Launch independent autonomous agents for a coordinator run and enqueue worker jobs |
+| `GET /work-jobs/:id` | Fetch queued/running/pushed worker job status |
 | `POST /forks` | Create a disposable fork record |
+| `GET /forks/:id/work` | Read checkout/work instructions |
+| `POST /forks/:id/work` | Commit a visible work file to a fork |
+| `GET /forks/:id/compare` | Fetch compare metadata for a fork |
+| `POST /forks/:id/pr` | Open or read a pull request for fork work |
+| `POST /forks/:id/eval` | Run the eval workflow for a fork |
 | `POST /submissions` | Submit a fork and queue an eval placeholder |
+| `POST /submissions/:id/pull-request` | Record a pull request URL/number for a submission |
 | `GET /forks/:id/status` | Fetch fork/submission/eval status |
 
 ## Smoke Flow

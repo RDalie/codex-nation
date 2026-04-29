@@ -1,14 +1,18 @@
 import type { Pool } from "pg";
 import { notFound } from "../errors.ts";
-import type { Agent, Eval, Event, Fork, ForkStatus, Project, Submission } from "../types.ts";
+import type { Agent, Eval, Event, Fork, ForkStatus, Project, PullRequest, Submission, WorkJob } from "../types.ts";
 import type {
   AgentCreate,
   AgentHubRepository,
   EvalCreate,
+  EvalUpdate,
   EventCreate,
   ForkCreate,
   ProjectCreate,
-  SubmissionCreate
+  PullRequestUpsert,
+  SubmissionCreate,
+  WorkJobCreate,
+  WorkJobUpdate
 } from "./repository.ts";
 
 export class PostgresRepository implements AgentHubRepository {
@@ -37,6 +41,11 @@ export class PostgresRepository implements AgentHubRepository {
     return result.rows[0] ? mapAgent(result.rows[0]) : null;
   }
 
+  async findAgentById(id: string): Promise<Agent | null> {
+    const result = await this.pool.query("SELECT * FROM agents WHERE id = $1", [id]);
+    return result.rows[0] ? mapAgent(result.rows[0]) : null;
+  }
+
   async findAgentByTokenHash(tokenHash: string): Promise<Agent | null> {
     const result = await this.pool.query("SELECT * FROM agents WHERE token_hash = $1", [tokenHash]);
     return result.rows[0] ? mapAgent(result.rows[0]) : null;
@@ -62,6 +71,11 @@ export class PostgresRepository implements AgentHubRepository {
   async findProjectBySlug(slug: string): Promise<Project | null> {
     const result = await this.pool.query("SELECT * FROM projects WHERE slug = $1", [slug]);
     return result.rows[0] ? mapProject(result.rows[0]) : null;
+  }
+
+  async listProjects(): Promise<Project[]> {
+    const result = await this.pool.query("SELECT * FROM projects ORDER BY created_at DESC");
+    return result.rows.map(mapProject);
   }
 
   async createFork(input: ForkCreate): Promise<Fork> {
@@ -104,6 +118,22 @@ export class PostgresRepository implements AgentHubRepository {
     return result.rows[0] ? mapFork(result.rows[0]) : null;
   }
 
+  async findLatestForkByProjectAndAgent(projectId: string, agentId: string): Promise<Fork | null> {
+    const result = await this.pool.query(
+      `
+        SELECT *
+        FROM forks
+        WHERE project_id = $1
+          AND created_by_agent_id = $2
+          AND parent_fork_id IS NOT NULL
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+      [projectId, agentId]
+    );
+    return result.rows[0] ? mapFork(result.rows[0]) : null;
+  }
+
   async listForksByProject(projectId: string): Promise<Fork[]> {
     const result = await this.pool.query(
       "SELECT * FROM forks WHERE project_id = $1 ORDER BY created_at ASC",
@@ -133,12 +163,29 @@ export class PostgresRepository implements AgentHubRepository {
     return mapSubmission(result.rows[0]);
   }
 
+  async findSubmissionById(id: string): Promise<Submission | null> {
+    const result = await this.pool.query("SELECT * FROM submissions WHERE id = $1", [id]);
+    return result.rows[0] ? mapSubmission(result.rows[0]) : null;
+  }
+
   async findLatestSubmissionByFork(forkId: string): Promise<Submission | null> {
     const result = await this.pool.query(
       "SELECT * FROM submissions WHERE fork_id = $1 ORDER BY created_at DESC LIMIT 1",
       [forkId]
     );
     return result.rows[0] ? mapSubmission(result.rows[0]) : null;
+  }
+
+  async updateSubmissionStatus(id: string, status: string): Promise<Submission> {
+    const result = await this.pool.query("UPDATE submissions SET status = $2 WHERE id = $1 RETURNING *", [
+      id,
+      status
+    ]);
+    if (!result.rows[0]) {
+      throw notFound("Submission");
+    }
+
+    return mapSubmission(result.rows[0]);
   }
 
   async createEval(input: EvalCreate): Promise<Eval> {
@@ -153,9 +200,145 @@ export class PostgresRepository implements AgentHubRepository {
     return mapEval(result.rows[0]);
   }
 
+  async findEvalById(id: string): Promise<Eval | null> {
+    const result = await this.pool.query("SELECT * FROM evals WHERE id = $1", [id]);
+    return result.rows[0] ? mapEval(result.rows[0]) : null;
+  }
+
   async findEvalBySubmission(submissionId: string): Promise<Eval | null> {
     const result = await this.pool.query("SELECT * FROM evals WHERE submission_id = $1", [submissionId]);
     return result.rows[0] ? mapEval(result.rows[0]) : null;
+  }
+
+  async updateEval(input: EvalUpdate): Promise<Eval> {
+    const result = await this.pool.query(
+      `
+        UPDATE evals
+        SET status = $2,
+            log = $3,
+            preview_url = $4,
+            completed_at = $5,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [input.id, input.status, input.log, input.previewUrl, input.completedAt]
+    );
+    if (!result.rows[0]) {
+      throw notFound("Eval");
+    }
+
+    return mapEval(result.rows[0]);
+  }
+
+  async upsertPullRequest(input: PullRequestUpsert): Promise<PullRequest> {
+    const result = await this.pool.query(
+      `
+        INSERT INTO pull_requests (id, submission_id, url, number, status)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (submission_id)
+        DO UPDATE SET
+          url = EXCLUDED.url,
+          number = EXCLUDED.number,
+          status = EXCLUDED.status,
+          updated_at = now()
+        RETURNING *
+      `,
+      [input.id, input.submissionId, input.url, input.number, input.status]
+    );
+    return mapPullRequest(result.rows[0]);
+  }
+
+  async findPullRequestBySubmission(submissionId: string): Promise<PullRequest | null> {
+    const result = await this.pool.query("SELECT * FROM pull_requests WHERE submission_id = $1", [submissionId]);
+    return result.rows[0] ? mapPullRequest(result.rows[0]) : null;
+  }
+
+  async createWorkJob(input: WorkJobCreate): Promise<WorkJob> {
+    const result = await this.pool.query(
+      `
+        INSERT INTO work_jobs (
+          id, agent_id, project_id, fork_id, status, identity_seed, prompt,
+          branch, commit_sha, result, error
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        RETURNING *
+      `,
+      [
+        input.id,
+        input.agentId,
+        input.projectId,
+        input.forkId,
+        input.status,
+        input.identitySeed,
+        input.prompt,
+        input.branch,
+        input.commitSha,
+        input.result,
+        input.error
+      ]
+    );
+    return mapWorkJob(result.rows[0]);
+  }
+
+  async findWorkJobById(id: string): Promise<WorkJob | null> {
+    const result = await this.pool.query("SELECT * FROM work_jobs WHERE id = $1", [id]);
+    return result.rows[0] ? mapWorkJob(result.rows[0]) : null;
+  }
+
+  async claimNextWorkJob(workerId: string): Promise<WorkJob | null> {
+    const result = await this.pool.query(
+      `
+        UPDATE work_jobs
+        SET status = 'running',
+            started_at = COALESCE(started_at, now()),
+            updated_at = now(),
+            error = NULL,
+            result = COALESCE(result, '{}'::jsonb) || jsonb_build_object('workerId', $1::text)
+        WHERE id = (
+          SELECT id
+          FROM work_jobs
+          WHERE status = 'queued'
+          ORDER BY created_at ASC
+          LIMIT 1
+          FOR UPDATE SKIP LOCKED
+        )
+        RETURNING *
+      `,
+      [workerId]
+    );
+    return result.rows[0] ? mapWorkJob(result.rows[0]) : null;
+  }
+
+  async updateWorkJob(input: WorkJobUpdate): Promise<WorkJob> {
+    const result = await this.pool.query(
+      `
+        UPDATE work_jobs
+        SET status = $2,
+            commit_sha = COALESCE($3, commit_sha),
+            result = CASE WHEN $4::jsonb IS NULL THEN result ELSE $4::jsonb END,
+            error = CASE WHEN $5::text IS NULL THEN error ELSE $5::text END,
+            started_at = CASE WHEN $6::timestamptz IS NULL THEN started_at ELSE $6::timestamptz END,
+            completed_at = CASE WHEN $7::timestamptz IS NULL THEN completed_at ELSE $7::timestamptz END,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [
+        input.id,
+        input.status,
+        input.commitSha,
+        input.result === undefined ? null : input.result,
+        input.error === undefined ? null : input.error,
+        input.startedAt === undefined ? null : input.startedAt,
+        input.completedAt === undefined ? null : input.completedAt
+      ]
+    );
+    if (!result.rows[0]) {
+      throw notFound("Work job");
+    }
+
+    return mapWorkJob(result.rows[0]);
   }
 
   async createEvent(input: EventCreate): Promise<Event> {
@@ -237,7 +420,40 @@ function mapEval(row: Record<string, any>): Eval {
     log: row.log,
     previewUrl: row.preview_url,
     createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+    completedAt: row.completed_at ? row.completed_at.toISOString() : null
+  };
+}
+
+function mapPullRequest(row: Record<string, any>): PullRequest {
+  return {
+    id: row.id,
+    submissionId: row.submission_id,
+    url: row.url,
+    number: row.number,
+    status: row.status,
+    createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString()
+  };
+}
+
+function mapWorkJob(row: Record<string, any>): WorkJob {
+  return {
+    id: row.id,
+    agentId: row.agent_id,
+    projectId: row.project_id,
+    forkId: row.fork_id,
+    status: row.status,
+    identitySeed: row.identity_seed,
+    prompt: row.prompt,
+    branch: row.branch,
+    commitSha: row.commit_sha,
+    result: row.result,
+    error: row.error,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+    startedAt: row.started_at ? row.started_at.toISOString() : null,
+    completedAt: row.completed_at ? row.completed_at.toISOString() : null
   };
 }
 

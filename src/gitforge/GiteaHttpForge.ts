@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { createShortSuffix } from "../ids.ts";
-import type { GitFile, GitForge, GitRepoRef } from "./GitForge.ts";
+import type { GitFile, GitForge, GitPullRequestRef, GitRepoRef, GitWriteFileResult } from "./GitForge.ts";
 
 type Fetch = typeof fetch;
 
@@ -30,7 +30,24 @@ type GiteaRepo = {
 type GiteaContentsResponse = {
   content?: string | null;
   encoding?: string | null;
+  sha?: string | null;
   type?: string | null;
+};
+
+type GiteaFileResponse = {
+  commit?: {
+    html_url?: string | null;
+    id?: string | null;
+    sha?: string | null;
+    url?: string | null;
+  } | null;
+};
+
+type GiteaPullRequest = {
+  html_url?: string | null;
+  index?: number | null;
+  number?: number | null;
+  url?: string | null;
 };
 
 export class GiteaApiError extends Error {
@@ -138,11 +155,18 @@ export class GiteaHttpForge implements GitForge {
       return this.repoRef(repo.owner.login, repo.name);
     } catch (error) {
       if (error instanceof GiteaApiError && error.status === 409) {
-        const repo = await this.request<GiteaRepo>(
+        const existingFork = await this.findExistingFork(input);
+        if (existingFork) {
+          return existingFork;
+        }
+
+        const repo = await this.requestOrNull<GiteaRepo>(
           "GET",
           `/api/v1/repos/${encodePath(input.targetOwner)}/${encodePath(forkName)}`
         );
-        return this.repoRef(repo.owner.login, repo.name);
+        if (repo) {
+          return this.repoRef(repo.owner.login, repo.name);
+        }
       }
 
       throw error;
@@ -165,6 +189,96 @@ export class GiteaHttpForge implements GitForge {
     }
 
     return { content: response.content };
+  }
+
+  async writeFile(input: {
+    owner: string;
+    repo: string;
+    path: string;
+    content: string;
+    message: string;
+    targetUser: string;
+    branch?: string;
+  }): Promise<GitWriteFileResult> {
+    const branch = input.branch ?? "main";
+    const contentsPath = `/api/v1/repos/${encodePath(input.owner)}/${encodePath(input.repo)}/contents/${encodeFilePath(input.path)}`;
+    const existing = await this.requestOrNull<GiteaContentsResponse>(
+      "GET",
+      `${contentsPath}?ref=${encodeURIComponent(branch)}`,
+      undefined,
+      { sudo: input.targetUser }
+    );
+
+    const body = {
+      content: Buffer.from(input.content, "utf8").toString("base64"),
+      message: input.message,
+      branch
+    };
+
+    const response =
+      existing === null
+        ? await this.request<GiteaFileResponse>("POST", contentsPath, body, { sudo: input.targetUser })
+        : await this.updateFile(contentsPath, body, existing, input.targetUser);
+
+    const commitSha = response.commit?.sha ?? response.commit?.id ?? null;
+
+    return {
+      owner: input.owner,
+      repo: input.repo,
+      path: input.path,
+      branch,
+      commitSha,
+      commitUrl: response.commit?.html_url ?? response.commit?.url ?? this.commitUrl(input.owner, input.repo, commitSha)
+    };
+  }
+
+  async createPullRequest(input: {
+    sourceOwner: string;
+    sourceRepo: string;
+    targetOwner: string;
+    targetRepo: string;
+    title: string;
+    targetUser: string;
+    body?: string;
+    sourceBranch?: string;
+    targetBranch?: string;
+  }): Promise<GitPullRequestRef> {
+    const targetBranch = input.targetBranch ?? "main";
+    const response = await this.request<GiteaPullRequest>(
+      "POST",
+      `/api/v1/repos/${encodePath(input.targetOwner)}/${encodePath(input.targetRepo)}/pulls`,
+      {
+        title: input.title,
+        body: input.body ?? "",
+        head: `${input.sourceOwner}:${input.sourceBranch ?? "main"}`,
+        base: targetBranch
+      },
+      { sudo: input.targetUser }
+    );
+    const number = response.number ?? response.index;
+
+    if (number === undefined || number === null) {
+      throw new Error("Gitea pull request response did not include a number");
+    }
+
+    return {
+      number,
+      url: response.html_url ?? response.url ?? this.pullRequestUrl(input.targetOwner, input.targetRepo, number)
+    };
+  }
+
+  compareUrl(input: {
+    sourceOwner: string;
+    sourceBranch?: string;
+    targetOwner: string;
+    targetRepo: string;
+    targetBranch?: string;
+  }): string {
+    const targetBranch = input.targetBranch ?? "main";
+    const sourceBranch = input.sourceBranch ?? "main";
+    return `${this.baseUrl}/${encodePath(input.targetOwner)}/${encodePath(input.targetRepo)}/compare/${encodePath(
+      targetBranch
+    )}...${encodePath(input.sourceOwner)}:${encodePath(sourceBranch)}`;
   }
 
   private async createRepoForOwner(input: {
@@ -201,6 +315,32 @@ export class GiteaHttpForge implements GitForge {
     }
   }
 
+  private async findExistingFork(input: {
+    sourceOwner: string;
+    sourceRepo: string;
+    targetOwner: string;
+  }): Promise<GitRepoRef | null> {
+    const forks = await this.requestOrNull<GiteaRepo[]>(
+      "GET",
+      `/api/v1/repos/${encodePath(input.sourceOwner)}/${encodePath(input.sourceRepo)}/forks?limit=50`
+    );
+    const fork = forks?.find((repo) => repo.owner.login === input.targetOwner);
+    return fork ? this.repoRef(fork.owner.login, fork.name) : null;
+  }
+
+  private async updateFile(
+    contentsPath: string,
+    body: { content: string; message: string; branch: string },
+    existing: GiteaContentsResponse,
+    targetUser: string
+  ): Promise<GiteaFileResponse> {
+    if (existing.type !== "file" || !existing.sha) {
+      throw new Error("Cannot update repository path because it is not an existing file");
+    }
+
+    return this.request<GiteaFileResponse>("PUT", contentsPath, { ...body, sha: existing.sha }, { sudo: targetUser });
+  }
+
   private async ensurePrimerFile(owner: string, repo: string, projectName: string): Promise<void> {
     const existing = await this.getFile({ owner, repo, path: "primer.md" });
     if (existing) {
@@ -227,6 +367,18 @@ export class GiteaHttpForge implements GitForge {
           ? `${this.sshUser}@${this.sshHost}:${owner}/${repo}.git`
           : `ssh://${this.sshUser}@${this.sshHost}:${this.sshPort}/${owner}/${repo}.git`
     };
+  }
+
+  private commitUrl(owner: string, repo: string, commitSha: string | null): string | null {
+    if (!commitSha) {
+      return null;
+    }
+
+    return `${this.baseUrl}/${encodePath(owner)}/${encodePath(repo)}/commit/${encodePath(commitSha)}`;
+  }
+
+  private pullRequestUrl(owner: string, repo: string, number: number): string {
+    return `${this.baseUrl}/${encodePath(owner)}/${encodePath(repo)}/pulls/${number}`;
   }
 
   private async requestOrNull<T>(

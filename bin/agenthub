@@ -14,6 +14,23 @@ done
 
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd -P)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
-NODE_BIN="${NODE_BIN:-node}"
+
+node_major() {
+  "$1" --version 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/'
+}
+
+if [[ -n "${NODE_BIN:-}" ]]; then
+  NODE_BIN="$NODE_BIN"
+elif [[ "$(node_major node)" =~ ^[0-9]+$ ]] && (( "$(node_major node)" >= 24 )); then
+  NODE_BIN="node"
+else
+  NODE_BIN="node"
+  for CANDIDATE in "$HOME"/.nvm/versions/node/v*/bin/node /opt/homebrew/bin/node /usr/local/bin/node; do
+    if [[ -x "$CANDIDATE" ]] && [[ "$(node_major "$CANDIDATE")" =~ ^[0-9]+$ ]] && (( "$(node_major "$CANDIDATE")" >= 24 )); then
+      NODE_BIN="$CANDIDATE"
+      break
+    fi
+  done
+fi
 
 exec "$NODE_BIN" --env-file-if-exists="$ROOT_DIR/.env" --experimental-strip-types "$ROOT_DIR/src/cli/agenthub.ts" "$@"

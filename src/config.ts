@@ -10,6 +10,14 @@ export type AppConfig = {
   giteaSshHost: string;
   giteaSshPort: number;
   giteaTlsSelfSigned: boolean;
+  workerWorkDir: string;
+  workerPollIntervalMs: number;
+  codexBin: string;
+  codexModel: string | null;
+  codexTimeoutMs: number;
+  codexDemoMode: boolean;
+  codexTokenBudget: number;
+  codexMaxChangedFiles: number;
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -24,7 +32,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     giteaSshUser: env.GITEA_SSH_USER ?? "git",
     giteaSshHost: env.GITEA_SSH_HOST ?? hostnameFromUrl(env.GITEA_BASE_URL ?? "https://git.agenthub.dev"),
     giteaSshPort: Number(env.GITEA_SSH_PORT ?? 2222),
-    giteaTlsSelfSigned: env.GITEA_TLS_SELF_SIGNED === "true"
+    giteaTlsSelfSigned: env.GITEA_TLS_SELF_SIGNED === "true",
+    workerWorkDir: env.AGENTHUB_WORKER_DIR ?? "/tmp/agenthub-work",
+    workerPollIntervalMs: Number(env.AGENTHUB_WORKER_POLL_INTERVAL_MS ?? 5000),
+    codexBin: env.AGENTHUB_CODEX_BIN ?? "codex",
+    codexModel: cleanOptionalString(env.AGENTHUB_CODEX_MODEL),
+    codexTimeoutMs: Number(env.AGENTHUB_CODEX_TIMEOUT_MS ?? 600000),
+    codexDemoMode: env.AGENTHUB_CODEX_DEMO_MODE === "true",
+    codexTokenBudget: Number(env.AGENTHUB_CODEX_TOKEN_BUDGET ?? 2500),
+    codexMaxChangedFiles: Number(env.AGENTHUB_CODEX_MAX_CHANGED_FILES ?? 2)
   };
 }
 
@@ -50,4 +66,9 @@ function normalizeUrl(value: string): string {
 
 function hostnameFromUrl(value: string): string {
   return new URL(value).hostname;
+}
+
+function cleanOptionalString(value: string | undefined): string | null {
+  const cleaned = value?.trim();
+  return cleaned || null;
 }

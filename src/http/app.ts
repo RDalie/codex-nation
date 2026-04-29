@@ -7,6 +7,7 @@ import Fastify, {
 import type { Agent } from "../types.ts";
 import { AppError, badRequest } from "../errors.ts";
 import { AgentHubService } from "../domain/AgentHubService.ts";
+import { registerReadOnlyUi } from "./readOnlyUi.ts";
 
 type AuthenticatedHandler<TRoute extends RouteGenericInterface> = (
   agent: Agent,
@@ -15,6 +16,7 @@ type AuthenticatedHandler<TRoute extends RouteGenericInterface> = (
 
 export function createApp(service: AgentHubService, options: { logger?: boolean } = {}): FastifyInstance {
   const app = Fastify({ logger: options.logger ?? true });
+  registerReadOnlyUi(app);
 
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof AppError) {
@@ -49,6 +51,17 @@ export function createApp(service: AgentHubService, options: { logger?: boolean 
     createdAt: agent.createdAt
   })));
 
+  app.get<{ Params: { id: string } }>(
+    "/work-jobs/:id",
+    withAgent<{ Params: { id: string } }>(service, async (agent, request) => {
+      return service.getWorkJob(agent, request.params.id);
+    })
+  );
+
+  app.get("/projects", async () => {
+    return service.listProjects();
+  });
+
   app.post<{ Body: { name: string; slug?: string; goal?: string } }>(
     "/projects",
     withAgent<{ Body: { name: string; slug?: string; goal?: string } }>(
@@ -67,6 +80,56 @@ export function createApp(service: AgentHubService, options: { logger?: boolean 
     return service.getProjectLineage(request.params.id);
   });
 
+  app.post<{
+    Body: {
+      projectId?: string;
+      projectIds?: string[];
+      agents?: Array<{ username?: string; goal?: string; content?: string; projectId?: string }>;
+      openPullRequests?: boolean;
+      runEval?: boolean;
+      cycle?: number;
+    };
+  }>(
+    "/agents/run",
+    withAgent<{
+      Body: {
+        projectId?: string;
+        projectIds?: string[];
+        agents?: Array<{ username?: string; goal?: string; content?: string; projectId?: string }>;
+        openPullRequests?: boolean;
+        runEval?: boolean;
+        cycle?: number;
+      };
+    }>(service, async (agent, request) => {
+      return service.runAgents(agent, optionalBody(request.body));
+    })
+  );
+
+  app.post<{
+    Params: { id: string };
+    Body: {
+      projectIds?: string[];
+      agents?: Array<{ username?: string; goal?: string; content?: string; projectId?: string }>;
+      openPullRequests?: boolean;
+      runEval?: boolean;
+      cycle?: number;
+    };
+  }>(
+    "/projects/:id/run-agents",
+    withAgent<{
+      Params: { id: string };
+      Body: {
+        projectIds?: string[];
+        agents?: Array<{ username?: string; goal?: string; content?: string; projectId?: string }>;
+        openPullRequests?: boolean;
+        runEval?: boolean;
+        cycle?: number;
+      };
+    }>(service, async (agent, request) => {
+      return service.runAgentsForProject(agent, { projectId: request.params.id, ...optionalBody(request.body) });
+    })
+  );
+
   app.post<{ Body: { projectId: string; parentForkId?: string; goal?: string } }>(
     "/forks",
     withAgent<{ Body: { projectId: string; parentForkId?: string; goal?: string } }>(
@@ -77,12 +140,66 @@ export function createApp(service: AgentHubService, options: { logger?: boolean 
     )
   );
 
+  app.post<{ Params: { id: string }; Body: { path?: string; content?: string; message?: string } }>(
+    "/forks/:id/work",
+    withAgent<{ Params: { id: string }; Body: { path?: string; content?: string; message?: string } }>(
+      service,
+      async (agent, request) => {
+        return service.performForkWork(agent, { forkId: request.params.id, ...optionalBody(request.body) });
+      }
+    )
+  );
+
+  app.get<{ Params: { id: string } }>("/forks/:id/compare", async (request) => {
+    return service.compareFork(request.params.id);
+  });
+
+  app.post<{ Params: { id: string }; Body: { title?: string; body?: string } }>(
+    "/forks/:id/pr",
+    withAgent<{ Params: { id: string }; Body: { title?: string; body?: string } }>(
+      service,
+      async (agent, request) => {
+        return service.createPullRequestForFork(agent, { forkId: request.params.id, ...optionalBody(request.body) });
+      }
+    )
+  );
+
+  app.get<{ Params: { id: string } }>(
+    "/forks/:id/work",
+    withAgent<{ Params: { id: string } }>(service, async (agent, request) => {
+      return service.getForkWork(agent, { forkId: request.params.id });
+    })
+  );
+
   app.post<{ Body: { forkId: string; commitSha?: string; primerPath?: string } }>(
     "/submissions",
     withAgent<{ Body: { forkId: string; commitSha?: string; primerPath?: string } }>(
       service,
       async (agent, request) => {
         return service.submitFork(agent, optionalBody(request.body));
+      }
+    )
+  );
+
+  app.post<{ Params: { id: string }; Body: { url: string; number?: number | null } }>(
+    "/submissions/:id/pull-request",
+    withAgent<{ Params: { id: string }; Body: { url: string; number?: number | null } }>(
+      service,
+      async (agent, request) => {
+        return service.recordPullRequest(agent, {
+          submissionId: request.params.id,
+          ...optionalBody(request.body)
+        });
+      }
+    )
+  );
+
+  app.post<{ Params: { id: string }; Body: { workPath?: string } }>(
+    "/forks/:id/eval",
+    withAgent<{ Params: { id: string }; Body: { workPath?: string } }>(
+      service,
+      async (agent, request) => {
+        return service.runForkEval(agent, { forkId: request.params.id, ...optionalBody(request.body) });
       }
     )
   );
